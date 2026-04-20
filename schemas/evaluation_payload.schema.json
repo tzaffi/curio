@@ -1,0 +1,536 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/tzaffi/curio/schemas/evaluation_payload.schema.json",
+  "title": "Curio Evaluation Payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "payload_version",
+    "generated_at",
+    "artifact",
+    "run",
+    "dossier_snapshot",
+    "evaluation"
+  ],
+  "properties": {
+    "payload_version": {
+      "const": "curio-evaluation-payload.v1"
+    },
+    "generated_at": {
+      "$ref": "#/$defs/rfc3339UtcTimestamp"
+    },
+    "artifact": {
+      "$ref": "#/$defs/artifact"
+    },
+    "run": {
+      "$ref": "#/$defs/run"
+    },
+    "dossier_snapshot": {
+      "$ref": "#/$defs/dossierSnapshot"
+    },
+    "evaluation": {
+      "$ref": "#/$defs/evaluation"
+    }
+  },
+  "$defs": {
+    "rfc3339UtcTimestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "sheetRenderedUtcTimestamp": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2} UTC$"
+    },
+    "sheetRenderedUtcOrEmpty": {
+      "type": "string",
+      "pattern": "^(|\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2} UTC)$"
+    },
+    "sha256Hex": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "nullableNonEmptyString": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "downloadRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "Date",
+        "X Date",
+        "iMsgX",
+        "Source",
+        "Column",
+        "Type",
+        "Object"
+      ],
+      "properties": {
+        "Date": {
+          "$ref": "#/$defs/sheetRenderedUtcTimestamp"
+        },
+        "X Date": {
+          "$ref": "#/$defs/sheetRenderedUtcOrEmpty"
+        },
+        "iMsgX": {
+          "type": "string",
+          "minLength": 1
+        },
+        "Source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "Column": {
+          "type": "string",
+          "enum": [
+            "Text",
+            "X1",
+            "X2",
+            "X3"
+          ]
+        },
+        "Type": {
+          "type": "string",
+          "enum": [
+            "Tweet",
+            "XArticle",
+            "Repo",
+            "HTMLPage",
+            "Document",
+            "Image",
+            "AnimatedGif",
+            "Video",
+            "Link"
+          ]
+        },
+        "Object": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "localArtifact": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "sha256",
+            "size_bytes",
+            "mime_type"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256Hex"
+            },
+            "size_bytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "mime_type": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ]
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "download_row",
+        "local_artifact"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "download_row": {
+          "$ref": "#/$defs/downloadRow"
+        },
+        "local_artifact": {
+          "$ref": "#/$defs/localArtifact"
+        }
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "trigger_mode",
+        "schema_version",
+        "prompt_version",
+        "vocabulary_version"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "trigger_mode": {
+          "type": "string",
+          "enum": [
+            "manual",
+            "automation"
+          ]
+        },
+        "schema_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prompt_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "vocabulary_version": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "textEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "text",
+        "was_truncated",
+        "original_char_count"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "text": {
+          "type": "string"
+        },
+        "was_truncated": {
+          "type": "boolean"
+        },
+        "original_char_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "dossierSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "assembled_at",
+        "title_hint",
+        "source_language_hint",
+        "evidence_text",
+        "details"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "tweet_json",
+            "x_article_json",
+            "html_page",
+            "repo_zip",
+            "image",
+            "video",
+            "animated_gif",
+            "document",
+            "link"
+          ]
+        },
+        "assembled_at": {
+          "$ref": "#/$defs/rfc3339UtcTimestamp"
+        },
+        "title_hint": {
+          "$ref": "#/$defs/nullableNonEmptyString"
+        },
+        "source_language_hint": {
+          "$ref": "#/$defs/nullableNonEmptyString"
+        },
+        "evidence_text": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/textEvidence"
+          }
+        },
+        "details": {
+          "type": "object"
+        }
+      }
+    },
+    "translation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "was_required",
+        "translated_excerpt_en"
+      ],
+      "properties": {
+        "was_required": {
+          "type": "boolean"
+        },
+        "translated_excerpt_en": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "overallImportance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "score",
+        "rationale"
+      ],
+      "properties": {
+        "score": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "conceptAssignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "concept_id",
+        "relevance",
+        "rationale"
+      ],
+      "properties": {
+        "concept_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "relevance": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "conceptProposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proposed_concept_id",
+        "pref_label",
+        "definition",
+        "relevance",
+        "rationale",
+        "closest_existing_concepts"
+      ],
+      "properties": {
+        "proposed_concept_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "pref_label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "definition": {
+          "type": "string",
+          "minLength": 1
+        },
+        "relevance": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        },
+        "closest_existing_concepts": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "entityType": {
+      "type": "string",
+      "enum": [
+        "person",
+        "organization",
+        "model",
+        "product",
+        "technology",
+        "repo",
+        "other"
+      ]
+    },
+    "entityAssignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entity_id",
+        "relevance",
+        "rationale"
+      ],
+      "properties": {
+        "entity_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "relevance": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "entityProposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "proposed_entity_id",
+        "canonical_name",
+        "entity_type",
+        "relevance",
+        "rationale",
+        "closest_existing_entities"
+      ],
+      "properties": {
+        "proposed_entity_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "canonical_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "entity_type": {
+          "$ref": "#/$defs/entityType"
+        },
+        "relevance": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        },
+        "closest_existing_entities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "evaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "creator",
+        "source_language",
+        "summary_en",
+        "translation",
+        "overall_importance",
+        "concepts",
+        "concept_proposals",
+        "entities",
+        "entity_proposals"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "creator": {
+          "$ref": "#/$defs/nullableNonEmptyString"
+        },
+        "source_language": {
+          "type": "string",
+          "minLength": 1
+        },
+        "summary_en": {
+          "type": "string",
+          "minLength": 1
+        },
+        "translation": {
+          "$ref": "#/$defs/translation"
+        },
+        "overall_importance": {
+          "$ref": "#/$defs/overallImportance"
+        },
+        "concepts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/conceptAssignment"
+          }
+        },
+        "concept_proposals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/conceptProposal"
+          }
+        },
+        "entities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/entityAssignment"
+          }
+        },
+        "entity_proposals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/entityProposal"
+          }
+        }
+      }
+    }
+  }
+}
