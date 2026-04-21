@@ -2,15 +2,14 @@
 
 ## Purpose
 
-Define the v1 persisted JSON payload that `curio` uploads to Google Drive for each accepted categorization.
+Define the lean v1 persisted JSON payload that `curio` uploads to Google Drive for each accepted evaluation.
 
 This document is normative for:
 
 - the top-level Drive payload shape
-- the boundary between deterministic Python-owned context and model-emitted judgment
 - dossier snapshot semantics
 - evaluation field semantics
-- payload validation rules for a successful categorization
+- payload validation rules for a successful accepted evaluation
 
 The machine-readable counterpart to this document is:
 
@@ -19,9 +18,9 @@ The machine-readable counterpart to this document is:
 This document is not the place to define:
 
 - the Google Sheets workbook model
-- the curated concept/entity registries
 - prompt wording
-- the exact artifact-id derivation algorithm
+- the exact label-registry contents
+- the exact artifact-key derivation algorithm
 
 Those belong in [SCHEMA.md](/Users/zeph/github/tzaffi/curio/SCHEMA.md), registry files, prompt files, and future ADRs.
 
@@ -29,18 +28,19 @@ Those belong in [SCHEMA.md](/Users/zeph/github/tzaffi/curio/SCHEMA.md), registry
 
 The v1 payload should follow these rules:
 
-- One Drive JSON payload represents one accepted categorization result for one artifact.
+- One Drive JSON payload represents one persisted accepted evaluation for one artifact.
 - The payload combines a deterministic envelope with one exact model-emitted `evaluation` object.
-- Python may assemble the envelope, validate the `evaluation`, and reject invalid outputs.
-- Python must not rewrite the meaning of the accepted `evaluation` object after generation.
+- Python may assemble the deterministic envelope, validate the `evaluation`, and reject invalid outputs.
+- Python must not rewrite the meaning of an accepted `evaluation` object after generation.
 - `download_row` preserves the exact `iMsgX` downloads-sheet header names.
 - `dossier_snapshot` preserves the exact normalized evidence shown to the model, not the raw artifact by itself.
 - If text shown to the model was truncated, the payload must say so explicitly.
-- The payload distinguishes between:
-  - concepts, which are canonical topical/categorical assignments
-  - entities, which are canonical named things such as models, orgs, products, technologies, people, and repos
-- `evaluation.concepts` and `evaluation.entities` contain only positive assignments; relevance `0` is omitted.
-- Aliases and concept relations are registry-level metadata. They do not appear directly in the payload except through canonical ids and proposal context.
+- Curio uses one prefixed label system in v1:
+  - `t:` for topics
+  - `e:` for entities
+- `evaluation.labels` contains only positive accepted labels.
+- `evaluation.proposals` contains only positive proposed labels.
+- `evaluation.warnings` is optional operational context for non-fatal issues and should remain compact.
 
 ## Top-Level Shape
 
@@ -49,9 +49,8 @@ The persisted payload has this structure:
 ```json
 {
   "payload_version": "curio-evaluation-payload.v1",
-  "generated_at": "2026-04-20T06:15:42.381Z",
+  "evaluated_at": "2026-04-20T06:15:42.381Z",
   "artifact": { "... deterministic provenance and local artifact metadata ..." },
-  "run": { "... deterministic run/version context ..." },
   "dossier_snapshot": { "... exact model-visible normalized evidence ..." },
   "evaluation": { "... exact model-emitted JSON ..." }
 }
@@ -61,12 +60,10 @@ Top-level fields:
 
 - `payload_version`
   Fixed v1 payload contract identifier. In v1 this must be `curio-evaluation-payload.v1`.
-- `generated_at`
-  UTC RFC 3339 timestamp for when Curio persisted the payload.
+- `evaluated_at`
+  UTC RFC 3339 timestamp for when Curio persisted the accepted evaluation.
 - `artifact`
-  Deterministic artifact identity, upstream `downloads` provenance, and local artifact-file metadata.
-- `run`
-  Deterministic run metadata and version trio.
+  Deterministic upstream `downloads` provenance and local artifact-file metadata.
 - `dossier_snapshot`
   The exact compact input Curio showed the model.
 - `evaluation`
@@ -78,8 +75,6 @@ Top-level fields:
 
 Required fields:
 
-- `id`
-  Stable artifact key. This must equal the `artifacts.id` value in Sheets.
 - `download_row`
   Exact `iMsgX` downloads-row shape, preserving the original headers:
   - `Date`
@@ -102,20 +97,6 @@ Required fields:
   Byte length of the local file.
 - `mime_type`
   Best deterministic MIME type for the local file.
-
-## `run`
-
-`run` is Python-owned deterministic metadata.
-
-Required fields:
-
-- `id`
-  Stable run identifier. This must equal the `runs.id` value in Sheets.
-- `trigger_mode`
-  One of `manual` or `automation`.
-- `schema_version`
-- `prompt_version`
-- `vocabulary_version`
 
 ## `dossier_snapshot`
 
@@ -181,10 +162,10 @@ Python may:
 Python must not:
 
 - reword the summary
-- change concept assignments
-- change entity assignments
+- change accepted labels
+- change proposed labels
 - change rationales
-- add or remove proposals
+- change warnings
 - otherwise alter the meaning of accepted model judgment
 
 Required fields:
@@ -197,76 +178,65 @@ Required fields:
   Accepted source language code.
 - `summary_en`
   English summary of the artifact.
-- `translation`
-  Translation metadata:
-  - `was_required`
-  - `translated_excerpt_en`
-- `overall_importance`
+- `translation_excerpt_en`
+  A short English translation excerpt when translation was required, otherwise `null`.
+- `importance`
   - `score`
   - `rationale`
-- `concepts`
-  Array of accepted direct concept assignments only.
-- `concept_proposals`
-  Array of proposed new concepts, possibly empty.
-- `entities`
-  Array of accepted entity mentions only.
-- `entity_proposals`
-  Array of proposed new entities, possibly empty.
+- `labels`
+  Array of accepted labels, possibly empty.
+- `proposals`
+  Array of proposed new labels, possibly empty.
+- `warnings`
+  Array of warning strings, possibly empty.
 
-`overall_importance.score` uses the v1 `0-5` scale.
+`importance.score` uses the v1 float scale `0.0` to `1.0`.
 
-Each `concepts` item contains:
+Each `labels` item contains:
 
-- `concept_id`
-- `relevance`
+- `label`
+- `score`
 - `rationale`
 
-`relevance` uses the v1 `1-3` scale.
+`label` must be a canonical prefixed label such as `t:open-models` or `e:gemma`.
 
-`evaluation.concepts` should contain only direct concept assignments, not broader-concept closure implied by the concept graph.
+Each `proposals` item contains:
 
-Each `concept_proposals` item contains:
-
-- `proposed_concept_id`
-- `pref_label`
-- `definition`
-- `relevance`
-- `rationale`
-- `closest_existing_concepts`
-
-Each `entities` item contains:
-
-- `entity_id`
-- `relevance`
+- `label`
+- `kind`
+- `parent`
+- `description`
+- `score`
 - `rationale`
 
-Each `entity_proposals` item contains:
+Proposal rules:
 
-- `proposed_entity_id`
-- `canonical_name`
-- `entity_type`
-- `relevance`
-- `rationale`
-- `closest_existing_entities`
+- `label` must use the same prefixed label convention as accepted labels.
+- `kind` must be one of `topic` or `entity`.
+- `kind` must agree with the `label` prefix.
+- `parent` is optional and, when present, must use the full prefixed canonical label form.
+- `description` is the proposed operator-facing description that would populate the `labels.Description` column if approved.
 
-## Validation And Categorization Rules
+`warnings` is a compact list of non-fatal issues observed during dossier assembly or evaluation.
 
-The payload is valid for a successful accepted categorization only when all of the following are true:
+## Validation Rules
+
+The payload is valid for a successful accepted evaluation only when all of the following are true:
 
 - the payload validates against [schemas/evaluation_payload.schema.json](/Users/zeph/github/tzaffi/curio/schemas/evaluation_payload.schema.json)
 - `artifact.download_row.Source` is non-empty
-- `artifact.id` is non-empty
 - `evaluation.title` is non-empty
 - `evaluation.summary_en` is non-empty
-- `evaluation.overall_importance.score` is an integer from `0` to `5`
-- every `evaluation.concepts` entry has `relevance` from `1` to `3`
-- every `evaluation.concept_proposals` entry has `relevance` from `1` to `3`
-- every `evaluation.entities` entry has `relevance` from `1` to `3`
-- every `evaluation.entity_proposals` entry has `relevance` from `1` to `3`
+- `evaluation.importance.score` is a number from `0.0` to `1.0`
+- every `evaluation.labels` entry has `score` greater than `0.0` and at most `1.0`
+- every `evaluation.proposals` entry has `score` greater than `0.0` and at most `1.0`
+- every `evaluation.labels[].label` uses the canonical prefixed format
+- every `evaluation.proposals[].label` uses the canonical prefixed format
+- every proposal `kind` agrees with the proposal-label prefix
 - `dossier_snapshot.evidence_text` exactly matches the evidence shown to the model
 - any text shortening is represented by `was_truncated` and `original_char_count`
 
-The payload is the object that `artifacts.latest_json_url` points to in Sheets.
+The payload is the object that `evaluations.JSON URL` points to in Sheets.
 
 ## Example Notes
 
@@ -289,7 +259,7 @@ Some values are shown as representative rather than exact because the live Googl
 - `iMsgX`
 - Drive `Object`
 
-The example concept ids and entity ids are illustrative because the canonical registries have not yet been finalized.
+The example labels are illustrative because the canonical registry has not yet been finalized.
 
 ## Example 1: Tweet JSON
 
@@ -300,9 +270,8 @@ Existing local artifact:
 ```json
 {
   "payload_version": "curio-evaluation-payload.v1",
-  "generated_at": "2026-04-20T06:15:42.381Z",
+  "evaluated_at": "2026-04-20T06:15:42.381Z",
   "artifact": {
-    "id": "artifact_googledeepmind_2039735446628925907",
     "download_row": {
       "Date": "2026-04-02 16:05:00 UTC",
       "X Date": "2026-04-02 16:03:21 UTC",
@@ -318,13 +287,6 @@ Existing local artifact:
       "size_bytes": 3374,
       "mime_type": "application/json"
     }
-  },
-  "run": {
-    "id": "run_2026_04_20_001",
-    "trigger_mode": "manual",
-    "schema_version": "v1",
-    "prompt_version": "v1",
-    "vocabulary_version": "v0"
   },
   "dossier_snapshot": {
     "kind": "tweet_json",
@@ -355,45 +317,40 @@ Existing local artifact:
     "creator": "Google DeepMind",
     "source_language": "en",
     "summary_en": "Google DeepMind announces Gemma 4, a family of Apache 2.0 open models positioned for advanced reasoning and agentic workflows on user-controlled hardware.",
-    "translation": {
-      "was_required": false,
-      "translated_excerpt_en": null
-    },
-    "overall_importance": {
-      "score": 4,
+    "translation_excerpt_en": null,
+    "importance": {
+      "score": 0.86,
       "rationale": "The artifact is a primary-source product announcement for a major open-model release with clear relevance to open models and agentic tooling."
     },
-    "concepts": [
+    "labels": [
       {
-        "concept_id": "open-models",
-        "relevance": 3,
+        "label": "t:open-models",
+        "score": 0.98,
         "rationale": "The tweet explicitly announces a new family of open models."
       },
       {
-        "concept_id": "local-inference",
-        "relevance": 2,
+        "label": "t:local-inference",
+        "score": 0.72,
         "rationale": "The announcement emphasizes running the models on user-controlled hardware."
       },
       {
-        "concept_id": "agentic-workflows",
-        "relevance": 2,
+        "label": "t:agentic-workflows",
+        "score": 0.58,
         "rationale": "The tweet explicitly positions the models for agentic workflows."
-      }
-    ],
-    "concept_proposals": [],
-    "entities": [
+      },
       {
-        "entity_id": "google-deepmind",
-        "relevance": 3,
+        "label": "e:google-deepmind",
+        "score": 0.95,
         "rationale": "Google DeepMind is the named publisher and creator of the release."
       },
       {
-        "entity_id": "gemma",
-        "relevance": 3,
+        "label": "e:gemma",
+        "score": 0.97,
         "rationale": "The artifact is directly about the Gemma 4 model family."
       }
     ],
-    "entity_proposals": []
+    "proposals": [],
+    "warnings": []
   }
 }
 ```
@@ -407,9 +364,8 @@ Existing local artifact:
 ```json
 {
   "payload_version": "curio-evaluation-payload.v1",
-  "generated_at": "2026-04-20T06:17:08.144Z",
+  "evaluated_at": "2026-04-20T06:17:08.144Z",
   "artifact": {
-    "id": "artifact_docs_openclaw_ai_providers_inferrs",
     "download_row": {
       "Date": "2026-04-10 02:11:19 UTC",
       "X Date": "2026-04-10 01:58:44 UTC",
@@ -425,13 +381,6 @@ Existing local artifact:
       "size_bytes": 4185906,
       "mime_type": "text/html"
     }
-  },
-  "run": {
-    "id": "run_2026_04_20_001",
-    "trigger_mode": "manual",
-    "schema_version": "v1",
-    "prompt_version": "v1",
-    "vocabulary_version": "v0"
   },
   "dossier_snapshot": {
     "kind": "html_page",
@@ -457,40 +406,37 @@ Existing local artifact:
     "creator": "OpenClaw",
     "source_language": "en",
     "summary_en": "The page explains how to use inferrs as an OpenAI-compatible backend inside OpenClaw, including configuration examples, compatibility caveats, and operational guidance for self-hosted model serving.",
-    "translation": {
-      "was_required": false,
-      "translated_excerpt_en": null
-    },
-    "overall_importance": {
-      "score": 3,
+    "translation_excerpt_en": null,
+    "importance": {
+      "score": 0.64,
       "rationale": "The artifact is practical integration documentation with clear relevance to local model serving and provider configuration, but it is not a major strategic announcement."
     },
-    "concepts": [
+    "labels": [
       {
-        "concept_id": "self-hosted-inference",
-        "relevance": 3,
+        "label": "t:self-hosted-inference",
+        "score": 0.96,
         "rationale": "The page is centered on serving models behind a self-hosted OpenAI-compatible API."
       },
       {
-        "concept_id": "provider-integration",
-        "relevance": 3,
+        "label": "t:provider-integration",
+        "score": 0.93,
         "rationale": "The core purpose of the page is configuring an inferrs provider entry inside OpenClaw."
-      }
-    ],
-    "concept_proposals": [],
-    "entities": [
+      },
       {
-        "entity_id": "inferrs",
-        "relevance": 3,
+        "label": "e:inferrs",
+        "score": 0.98,
         "rationale": "The page specifically documents how to use inferrs."
       },
       {
-        "entity_id": "openclaw",
-        "relevance": 2,
+        "label": "e:openclaw",
+        "score": 0.67,
         "rationale": "OpenClaw is the host system into which inferrs is being integrated."
       }
     ],
-    "entity_proposals": []
+    "proposals": [],
+    "warnings": [
+      "page_main_text was truncated before evaluation."
+    ]
   }
 }
 ```
@@ -504,9 +450,8 @@ Existing local artifact:
 ```json
 {
   "payload_version": "curio-evaluation-payload.v1",
-  "generated_at": "2026-04-20T06:19:33.006Z",
+  "evaluated_at": "2026-04-20T06:19:33.006Z",
   "artifact": {
-    "id": "artifact_github_txbabaxyz_polyrec",
     "download_row": {
       "Date": "2026-01-31 12:42:10 UTC",
       "X Date": "2026-01-31 12:38:00 UTC",
@@ -522,13 +467,6 @@ Existing local artifact:
       "size_bytes": 25614,
       "mime_type": "application/zip"
     }
-  },
-  "run": {
-    "id": "run_2026_04_20_001",
-    "trigger_mode": "manual",
-    "schema_version": "v1",
-    "prompt_version": "v1",
-    "vocabulary_version": "v0"
   },
   "dossier_snapshot": {
     "kind": "repo_zip",
@@ -565,54 +503,51 @@ Existing local artifact:
     "creator": "txbabaxyz",
     "source_language": "en",
     "summary_en": "The repository packages a real-time Polymarket BTC market dashboard together with backtesting and visualization scripts for market-data-driven trading research.",
-    "translation": {
-      "was_required": false,
-      "translated_excerpt_en": null
-    },
-    "overall_importance": {
-      "score": 3,
+    "translation_excerpt_en": null,
+    "importance": {
+      "score": 0.61,
       "rationale": "The repo is a concrete specialized tool for Polymarket market monitoring and strategy research, but it appears narrower in scope than a broadly reusable infrastructure project."
     },
-    "concepts": [
+    "labels": [
       {
-        "concept_id": "prediction-markets",
-        "relevance": 3,
+        "label": "t:prediction-markets",
+        "score": 0.97,
         "rationale": "The repository is explicitly built around Polymarket BTC UP/DOWN prediction markets."
       },
       {
-        "concept_id": "trading-infrastructure",
-        "relevance": 2,
+        "label": "t:trading-infrastructure",
+        "score": 0.64,
         "rationale": "The repository includes a live dashboard, logging, and backtesting utilities for trading-related workflows."
-      }
-    ],
-    "concept_proposals": [
+      },
       {
-        "proposed_concept_id": "market-microstructure-tooling",
-        "pref_label": "Market Microstructure Tooling",
-        "definition": "Tools focused on real-time orderbook, spread, imbalance, and execution-oriented market-data analysis.",
-        "relevance": 2,
-        "rationale": "The repo emphasizes orderbook depth, imbalance, microprice, and short-horizon market analytics rather than only generic trading commentary.",
-        "closest_existing_concepts": ["trading-infrastructure"]
-      }
-    ],
-    "entities": [
-      {
-        "entity_id": "polymarket",
-        "relevance": 3,
+        "label": "e:polymarket",
+        "score": 0.96,
         "rationale": "Polymarket is the core market venue and data source the repository is built around."
       },
       {
-        "entity_id": "binance",
-        "relevance": 2,
+        "label": "e:binance",
+        "score": 0.54,
         "rationale": "Binance is a named upstream market-data input used by the dashboard."
       },
       {
-        "entity_id": "chainlink",
-        "relevance": 2,
+        "label": "e:chainlink",
+        "score": 0.53,
         "rationale": "Chainlink oracle data is an explicit input to the system."
       }
     ],
-    "entity_proposals": []
+    "proposals": [
+      {
+        "label": "t:market-microstructure-tooling",
+        "kind": "topic",
+        "parent": "t:trading-infrastructure",
+        "description": "Tools focused on real-time orderbook, spread, imbalance, and execution-oriented market-data analysis.",
+        "score": 0.57,
+        "rationale": "The repo emphasizes orderbook depth, imbalance, microprice, and short-horizon market analytics rather than only generic trading commentary."
+      }
+    ],
+    "warnings": [
+      "repo_readme was truncated before evaluation."
+    ]
   }
 }
 ```

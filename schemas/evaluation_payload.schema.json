@@ -6,9 +6,8 @@
   "additionalProperties": false,
   "required": [
     "payload_version",
-    "generated_at",
+    "evaluated_at",
     "artifact",
-    "run",
     "dossier_snapshot",
     "evaluation"
   ],
@@ -16,14 +15,11 @@
     "payload_version": {
       "const": "curio-evaluation-payload.v1"
     },
-    "generated_at": {
+    "evaluated_at": {
       "$ref": "#/$defs/rfc3339UtcTimestamp"
     },
     "artifact": {
       "$ref": "#/$defs/artifact"
-    },
-    "run": {
-      "$ref": "#/$defs/run"
     },
     "dossier_snapshot": {
       "$ref": "#/$defs/dossierSnapshot"
@@ -60,6 +56,10 @@
           "type": "null"
         }
       ]
+    },
+    "prefixedLabel": {
+      "type": "string",
+      "pattern": "^(e|t):.+$"
     },
     "downloadRow": {
       "type": "object",
@@ -155,56 +155,15 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "id",
         "download_row",
         "local_artifact"
       ],
       "properties": {
-        "id": {
-          "type": "string",
-          "minLength": 1
-        },
         "download_row": {
           "$ref": "#/$defs/downloadRow"
         },
         "local_artifact": {
           "$ref": "#/$defs/localArtifact"
-        }
-      }
-    },
-    "run": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "id",
-        "trigger_mode",
-        "schema_version",
-        "prompt_version",
-        "vocabulary_version"
-      ],
-      "properties": {
-        "id": {
-          "type": "string",
-          "minLength": 1
-        },
-        "trigger_mode": {
-          "type": "string",
-          "enum": [
-            "manual",
-            "automation"
-          ]
-        },
-        "schema_version": {
-          "type": "string",
-          "minLength": 1
-        },
-        "prompt_version": {
-          "type": "string",
-          "minLength": 1
-        },
-        "vocabulary_version": {
-          "type": "string",
-          "minLength": 1
         }
       }
     },
@@ -281,31 +240,7 @@
         }
       }
     },
-    "translation": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "was_required",
-        "translated_excerpt_en"
-      ],
-      "properties": {
-        "was_required": {
-          "type": "boolean"
-        },
-        "translated_excerpt_en": {
-          "oneOf": [
-            {
-              "type": "string",
-              "minLength": 1
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      }
-    },
-    "overallImportance": {
+    "importance": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -314,9 +249,9 @@
       ],
       "properties": {
         "score": {
-          "type": "integer",
+          "type": "number",
           "minimum": 0,
-          "maximum": 5
+          "maximum": 1
         },
         "rationale": {
           "type": "string",
@@ -324,23 +259,22 @@
         }
       }
     },
-    "conceptAssignment": {
+    "labelAssignment": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "concept_id",
-        "relevance",
+        "label",
+        "score",
         "rationale"
       ],
       "properties": {
-        "concept_id": {
-          "type": "string",
-          "minLength": 1
+        "label": {
+          "$ref": "#/$defs/prefixedLabel"
         },
-        "relevance": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 3
+        "score": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
         },
         "rationale": {
           "type": "string",
@@ -348,126 +282,101 @@
         }
       }
     },
-    "conceptProposal": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "proposed_concept_id",
-        "pref_label",
-        "definition",
-        "relevance",
-        "rationale",
-        "closest_existing_concepts"
-      ],
-      "properties": {
-        "proposed_concept_id": {
-          "type": "string",
-          "minLength": 1
-        },
-        "pref_label": {
-          "type": "string",
-          "minLength": 1
-        },
-        "definition": {
-          "type": "string",
-          "minLength": 1
-        },
-        "relevance": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 3
-        },
-        "rationale": {
-          "type": "string",
-          "minLength": 1
-        },
-        "closest_existing_concepts": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1
-          },
-          "uniqueItems": true
-        }
-      }
-    },
-    "entityType": {
+    "labelKind": {
       "type": "string",
       "enum": [
-        "person",
-        "organization",
-        "model",
-        "product",
-        "technology",
-        "repo",
-        "other"
+        "topic",
+        "entity"
       ]
     },
-    "entityAssignment": {
+    "labelProposal": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "entity_id",
-        "relevance",
+        "label",
+        "kind",
+        "parent",
+        "description",
+        "score",
         "rationale"
       ],
       "properties": {
-        "entity_id": {
+        "label": {
+          "$ref": "#/$defs/prefixedLabel"
+        },
+        "kind": {
+          "$ref": "#/$defs/labelKind"
+        },
+        "parent": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/prefixedLabel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
           "type": "string",
           "minLength": 1
         },
-        "relevance": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 3
+        "score": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
         },
         "rationale": {
           "type": "string",
           "minLength": 1
         }
-      }
-    },
-    "entityProposal": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "proposed_entity_id",
-        "canonical_name",
-        "entity_type",
-        "relevance",
-        "rationale",
-        "closest_existing_entities"
-      ],
-      "properties": {
-        "proposed_entity_id": {
-          "type": "string",
-          "minLength": 1
-        },
-        "canonical_name": {
-          "type": "string",
-          "minLength": 1
-        },
-        "entity_type": {
-          "$ref": "#/$defs/entityType"
-        },
-        "relevance": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 3
-        },
-        "rationale": {
-          "type": "string",
-          "minLength": 1
-        },
-        "closest_existing_entities": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "entity"
+              }
+            },
+            "required": [
+              "kind"
+            ]
           },
-          "uniqueItems": true
+          "then": {
+            "properties": {
+              "label": {
+                "type": "string",
+                "pattern": "^e:.+$"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "topic"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "label": {
+                "type": "string",
+                "pattern": "^t:.+$"
+              }
+            }
+          }
         }
-      }
+      ]
+    },
+    "warning": {
+      "type": "string",
+      "minLength": 1
     },
     "evaluation": {
       "type": "object",
@@ -477,12 +386,11 @@
         "creator",
         "source_language",
         "summary_en",
-        "translation",
-        "overall_importance",
-        "concepts",
-        "concept_proposals",
-        "entities",
-        "entity_proposals"
+        "translation_excerpt_en",
+        "importance",
+        "labels",
+        "proposals",
+        "warnings"
       ],
       "properties": {
         "title": {
@@ -500,35 +408,30 @@
           "type": "string",
           "minLength": 1
         },
-        "translation": {
-          "$ref": "#/$defs/translation"
+        "translation_excerpt_en": {
+          "$ref": "#/$defs/nullableNonEmptyString"
         },
-        "overall_importance": {
-          "$ref": "#/$defs/overallImportance"
+        "importance": {
+          "$ref": "#/$defs/importance"
         },
-        "concepts": {
+        "labels": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/conceptAssignment"
+            "$ref": "#/$defs/labelAssignment"
           }
         },
-        "concept_proposals": {
+        "proposals": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/conceptProposal"
+            "$ref": "#/$defs/labelProposal"
           }
         },
-        "entities": {
+        "warnings": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/entityAssignment"
-          }
-        },
-        "entity_proposals": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/entityProposal"
-          }
+            "$ref": "#/$defs/warning"
+          },
+          "uniqueItems": true
         }
       }
     }
