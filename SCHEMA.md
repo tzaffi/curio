@@ -2,16 +2,16 @@
 
 ## Purpose
 
-Define the v1 online data model for `curio`.
+Define the lean v1 online workbook shape for `curio`.
 
 This document is normative for:
 
-- the Google Sheets workbook shape owned by `curio`
-- the meaning of each canonical tab
-- column intent for the normalized tables
-- idempotency semantics for categorization
+- the Google Sheets tabs owned by `curio`
+- the meaning of each Curio tab
+- the intended columns for each tab
+- append-only evaluation semantics
 - the relationship between Google Sheets rows and Google Drive JSON payloads
-- the role of the derived `categories_view` tab
+- the role of the derived `catalog` tab
 
 This document is not the place to define:
 
@@ -27,82 +27,16 @@ Those belong in [JSON-PAYLOAD.md](/Users/zeph/github/tzaffi/curio/JSON-PAYLOAD.m
 
 The v1 schema should follow these rules:
 
-- Google Sheets is the online operational source of truth in v1.
-- Google Drive stores per-artifact evaluation JSON for audit and history.
-- `downloads` remains the `iMsgX` append-only ingestion ledger.
-- `artifacts` is a thin Curio-owned current-state table, not a renamed mirror of `downloads`.
-- Curio must distinguish between:
-  - concepts such as `open-models` or `self-hosted-inference`
-  - entities such as `Gemma`, `inferrs`, `OpenClaw`, or `Google DeepMind`
-- Concepts and entities are human-governed. The model may propose new concepts or entities, but it must not create new canonical rows automatically in v1.
-- Aliases solve naming variation. They do not replace merge/deprecation mechanics.
-- `categories_view` is a derived convenience surface, not the canonical store.
-- `overall_importance` and assignment `relevance` are separate concepts and must remain separate in the schema.
-
-## Naming Conventions
-
-- tab names are plural snake_case except the already-chosen `categories_view`
-- primary keys are stored in an `id` column
-- foreign keys are named `<table_singular>_id`
-- Curio-owned timestamp columns use `_at`
-- Curio-owned URL columns use `_url`
-- status columns use short lowercase text enums
-
-When `curio` intentionally carries an exact upstream header from `downloads`, that header should be preserved verbatim even if it does not match Curio's normal naming style.
-
-## Timestamp Format
-
-All persisted timestamps must use UTC RFC 3339 text with a trailing `Z`.
-
-Example:
-
-```text
-2026-04-19T05:31:22.123Z
-```
-
-## Version Tracking
-
-Every successful categorization must record the versions that produced it.
-
-V1 tracks these independently:
-
-- `schema_version`
-- `prompt_version`
-- `vocabulary_version`
-
-`vocabulary_version` covers the current concept/entity registry state, including aliases and concept relations.
-
-An artifact is considered categorized for the current contract only when its latest successful row state matches the versions targeted by the current run.
-
-If any of those versions change later, the artifact is eligible for re-categorization even if it was successfully categorized before.
-
-## Idempotency Rules
-
-`curio` should model one row in `artifacts` per unique upstream artifact.
-
-That row is the current accepted state for that artifact, not an append-only event log.
-
-In v1, the unique upstream artifact identity is anchored by the exact `downloads.Source` value.
-
-The `artifacts` table should carry that join field under the exact header name `Source`.
-
-An artifact counts as successfully categorized when all of the following are true:
-
-- `evaluation_status` is `categorized`
-- `categorized_at` is populated
-- `latest_run_id` is populated
-- `latest_json_url` is populated
-- `schema_version`, `prompt_version`, and `vocabulary_version` reflect the accepted evaluation
-
-`artifact_concepts` and `artifact_entities` should store only the current accepted positive assignments for that artifact.
-
-When an artifact is re-categorized, `curio` should replace that artifact's prior `artifact_concepts` and `artifact_entities` rows with the new accepted sets.
-
-No row should be stored in an assignment table for relevance `0`.
-
-`artifact_concepts` should store only direct concept assignments.
-
-If `self-hosted-inference` is narrower than `local-inference`, the broader `local-inference` hit should come from `concept_relations`, not from duplicating both assignments on every artifact by default.
+- Google Sheets remains the online operational store in v1.
+- Google Drive stores the full per-evaluation JSON payload.
+- `downloads` remains the upstream `iMsgX` append-only ingestion ledger.
+- Curio is append-only in v1.
+- `Source` is the stable artifact identity in Sheets v1.
+- Curio uses one canonical `labels` registry with a lightweight `Kind` field.
+- Curio uses one score scale everywhere: float `0.0` to `1.0`.
+- Curio does not use aliases, merge state, separate entity tables, or a runs table in v1.
+- Curio keeps one compact derived human-facing tab, `catalog`.
+- We are optimizing for portability, inspectability, and low operational complexity over relational purity.
 
 ## Relationship To `iMsgX`
 
@@ -118,401 +52,130 @@ The upstream downloads sheet currently has these columns:
 - `Type`
 - `Object`
 
-V1 `curio` should treat `downloads` as the authoritative ingestion/provenance ledger.
+V1 `curio` should treat `downloads` as the authoritative append-only ingestion and provenance log.
 
-`curio` should not mirror those columns into `artifacts` under renamed Curio-specific names.
+Curio-owned state should live in Curio tabs, not by mutating or renaming `downloads` columns.
 
-V1 should carry only one exact upstream field on `artifacts`: `Source`.
+## Sheet Rules
 
-That field exists only as the durable join back to `downloads` and should exactly match `downloads.Source`.
+- Header row values must match exactly.
+- Sheets validation may be used for simple enums, but Curio must not depend on Sheets for relational integrity.
+- No dossier text or large rationales belong in Sheets rows; that detail lives in Drive JSON.
+- Before evaluating a downloads row, Curio should check whether `evaluations` already contains a row for that exact `Source`.
+- If a row already exists for that `Source`, Curio should skip the evaluation, append no new row, and print a terminal message that includes the `Source` and the downloads sheet row number being skipped.
+- History is never rewritten.
+- The `catalog` tab is derived and may be rebuilt at any time from `downloads` and `evaluations`.
 
-Other upstream provenance such as `Date`, `X Date`, `iMsgX`, `Column`, `Type`, and `Object` should be read from `downloads` directly or surfaced through derived views such as `categories_view`.
+## Timestamp Format
+
+Visible timestamp cells in Sheets should use the same UTC text format already used by `iMsgX`:
+
+```text
+YYYY-MM-DD HH:MM:SS UTC
+```
+
+Example:
+
+```text
+2026-04-20 06:15:42 UTC
+```
 
 ## Drive JSON Boundary
 
-For each successful categorization, `curio` should upload one JSON payload to Google Drive.
+For each accepted evaluation, Curio should upload one JSON payload to Google Drive.
 
-That payload is the full audit artifact for the accepted evaluation and should contain:
+That payload is the full audit artifact for the evaluation and should contain:
 
-- the artifact dossier used for evaluation
+- the dossier used for evaluation
 - the model's structured output
-- version metadata
-- any artifact-type-specific details that do not fit cleanly into normalized Sheets columns
+- any artifact-type-specific details that do not fit cleanly into Sheets cells
 
-Google Sheets should store the current normalized cross-artifact state plus a pointer to that latest accepted JSON payload.
+Google Sheets should store only compact summary state plus a pointer to the Drive JSON payload.
 
-The full Drive-payload contract is defined in [JSON-PAYLOAD.md](/Users/zeph/github/tzaffi/curio/JSON-PAYLOAD.md) and [schemas/evaluation_payload.schema.json](/Users/zeph/github/tzaffi/curio/schemas/evaluation_payload.schema.json).
+The current Drive-payload contract is defined in [JSON-PAYLOAD.md](/Users/zeph/github/tzaffi/curio/JSON-PAYLOAD.md) and [schemas/evaluation_payload.schema.json](/Users/zeph/github/tzaffi/curio/schemas/evaluation_payload.schema.json).
 
-V1 should not add an `artifact_evaluations` sheet unless history in Drive plus `runs` proves insufficient.
+Those payload docs will need a matching simplification next. This schema doc does not attempt to redefine them.
 
-## Tables
+## Tabs
 
-### `artifacts`
+### `labels`
 
-One row per unique artifact known to `curio`.
-
-This is the canonical current-state table for artifacts.
+The canonical Curio label registry.
 
 Columns:
 
-- `id`
+- `Label`
+- `Kind`
+- `Parent`
+- `Description`
+
+Semantics:
+
+- `Label` is the canonical identity and must always include its kind prefix.
+- `Kind` is one of:
+  - `topic`
+  - `entity`
+- label prefixes are:
+  - `t:` for topics
+  - `e:` for entities
+- examples:
+  - `t:oracle`
+  - `e:oracle`
+- `Kind` must agree with the `Label` prefix.
+- `Parent` is optional and points to one broader canonical `Label`, using the full prefixed label value.
+- `Description` is short operator guidance about intended usage and boundaries.
+- Curio does not model aliases in v1.
+- If a proposal is really another way to name an existing label, review should map it to the existing canonical `Label` instead of creating alias or merge state.
+- `related` edges are out of scope for v1. Only optional single-parent hierarchy is supported.
+
+### `evaluations`
+
+The append-only operational log of persisted accepted Curio evaluations.
+
+Columns:
+
+- `Evaluated At`
 - `Source`
-- `title`
-- `creator`
-- `source_language`
-- `summary_en`
-- `overall_importance`
-- `evaluation_status`
-- `latest_run_id`
-- `latest_json_url`
-- `schema_version`
-- `prompt_version`
-- `vocabulary_version`
-- `categorized_at`
-- `last_error`
-- `created_at`
-- `updated_at`
-
-Notes:
-
-- `id` is the durable Curio artifact key and must be deterministic from the stable upstream `Source` value, not from Curio row order.
-- `Source` is the exact upstream header name from `downloads` and is the v1 join field back to `downloads.Source`.
-- `artifacts` deliberately does not copy or rename the rest of the `downloads` provenance columns.
-- `title`, `creator`, `source_language`, and `summary_en` are cross-artifact summary fields and may be blank until categorization succeeds.
-- `overall_importance` uses the v1 integer scale `0-5`.
-- `evaluation_status` is one of:
-  - `pending`
-  - `categorized`
-  - `error`
-  - `skipped`
-- `latest_json_url` points to the latest accepted Drive JSON payload, not to every prior evaluation.
-
-Constraints:
-
-- primary key on `id`
-- unique constraint on `Source`
-- `overall_importance` must be an integer from `0` to `5` when populated
-
-### `concepts`
-
-Defines the approved canonical concept vocabulary currently usable by `curio`.
-
-Columns:
-
-- `id`
-- `pref_label`
-- `definition`
-- `scope_note`
-- `status`
-- `merged_into_concept_id`
-- `created_at`
-- `updated_at`
-
-Notes:
-
-- `id` should be a stable slug-like machine key.
-- `pref_label` is the canonical human-facing concept label.
-- `scope_note` is optional operator guidance about boundaries and intended use.
-- `status` is one of:
-  - `active`
-  - `deprecated`
-  - `merged`
-
-Constraints:
-
-- primary key on `id`
-- unique constraint on `pref_label`
-- foreign key `merged_into_concept_id -> concepts(id)` when populated
-
-Implementation notes:
-
-- aliases live in `concept_aliases`, not in this row.
-- if a concept is merged, the row stays addressable for audit/history but should point at the surviving concept via `merged_into_concept_id`.
-
-### `concept_aliases`
-
-Stores alternate strings that should resolve to a canonical concept.
-
-Columns:
-
-- `id`
-- `concept_id`
-- `alias`
-- `created_at`
-- `updated_at`
-
-Notes:
-
-- aliases capture naming variation such as acronyms, old phrasing, or merged concept names
-- aliases solve lexical equivalence, not concept lifecycle by themselves
-
-Constraints:
-
-- primary key on `id`
-- foreign key `concept_id -> concepts(id)`
-- unique constraint on normalized `alias`
-
-### `concept_relations`
-
-Stores direct concept-to-concept relations.
-
-Columns:
-
-- `id`
-- `from_concept_id`
-- `relation_type`
-- `to_concept_id`
-- `created_at`
-- `updated_at`
-
-Notes:
-
-- `relation_type` is one of:
-  - `broader`
-  - `related`
-- `broader` records only the direct broader parent
-- `narrower` is implied as the inverse of `broader`
-- `related` is associative rather than hierarchical
-
-Constraints:
-
-- primary key on `id`
-- foreign key `from_concept_id -> concepts(id)`
-- foreign key `to_concept_id -> concepts(id)`
-- unique constraint on `(from_concept_id, relation_type, to_concept_id)`
-
-### `artifact_concepts`
-
-Stores the current accepted direct concept assignments for artifacts.
-
-Columns:
-
-- `id`
-- `artifact_id`
-- `concept_id`
-- `relevance`
-- `rationale`
-- `run_id`
-- `created_at`
-- `updated_at`
-
-Notes:
-
-- store one row only when the concept positively applies to the artifact
-- absence of a row means relevance `0`
-- `relevance` uses the v1 integer scale `1-3`
-- `rationale` should be short and specific enough to justify the assignment
-- `run_id` points to the run that produced the current accepted assignment
-
-Constraints:
-
-- primary key on `id`
-- foreign key `artifact_id -> artifacts(id)`
-- foreign key `concept_id -> concepts(id)`
-- foreign key `run_id -> runs(id)`
-- unique constraint on `(artifact_id, concept_id)`
-- `relevance` must be an integer from `1` to `3`
-
-### `concept_proposals`
-
-Stores model-suggested concepts that are not yet part of the approved canonical concept vocabulary.
-
-Columns:
-
-- `id`
-- `artifact_id`
-- `proposed_concept_id`
-- `pref_label`
-- `definition`
-- `relevance`
-- `rationale`
-- `closest_existing_concepts`
-- `status`
-- `proposed_by_run_id`
-- `reviewed_at`
-- `created_at`
-- `updated_at`
-
-Notes:
-
-- `proposed_concept_id` should be a proposed slug-like machine key
-- `relevance` uses the same v1 integer scale `1-3` as accepted artifact-concept assignments
-- `closest_existing_concepts` is optional operator-facing context
-- `status` is one of:
-  - `pending`
-  - `accepted`
-  - `rejected`
-
-Constraints:
-
-- primary key on `id`
-- foreign key `artifact_id -> artifacts(id)`
-- foreign key `proposed_by_run_id -> runs(id)`
-- `relevance` must be an integer from `1` to `3`
-
-### `entities`
-
-Defines canonical named entities currently usable by `curio`.
-
-Columns:
-
-- `id`
-- `canonical_name`
-- `entity_type`
-- `status`
-- `merged_into_entity_id`
-- `created_at`
-- `updated_at`
-
-Notes:
-
-- `entity_type` is one of:
-  - `person`
-  - `organization`
-  - `model`
-  - `product`
-  - `technology`
-  - `repo`
-  - `other`
-- `status` is one of:
-  - `active`
-  - `deprecated`
-  - `merged`
-
-Constraints:
-
-- primary key on `id`
-- unique constraint on `(canonical_name, entity_type)`
-- foreign key `merged_into_entity_id -> entities(id)` when populated
-
-### `entity_aliases`
-
-Stores alternate strings that should resolve to a canonical entity.
-
-Columns:
-
-- `id`
-- `entity_id`
-- `alias`
-- `created_at`
-- `updated_at`
-
-Constraints:
-
-- primary key on `id`
-- foreign key `entity_id -> entities(id)`
-- unique constraint on normalized `alias`
-
-### `artifact_entities`
-
-Stores the current accepted entity mentions for artifacts.
-
-Columns:
-
-- `id`
-- `artifact_id`
-- `entity_id`
-- `relevance`
-- `rationale`
-- `run_id`
-- `created_at`
-- `updated_at`
-
-Notes:
-
-- store one row only when the entity is materially about the artifact, not for every incidental mention
-- `relevance` uses the v1 integer scale `1-3`
-
-Constraints:
-
-- primary key on `id`
-- foreign key `artifact_id -> artifacts(id)`
-- foreign key `entity_id -> entities(id)`
-- foreign key `run_id -> runs(id)`
-- unique constraint on `(artifact_id, entity_id)`
-- `relevance` must be an integer from `1` to `3`
-
-### `entity_proposals`
-
-Stores model-suggested entities that are not yet part of the canonical entity registry.
-
-Columns:
-
-- `id`
-- `artifact_id`
-- `proposed_entity_id`
-- `canonical_name`
-- `entity_type`
-- `relevance`
-- `rationale`
-- `closest_existing_entities`
-- `status`
-- `proposed_by_run_id`
-- `reviewed_at`
-- `created_at`
-- `updated_at`
-
-Notes:
-
-- `status` is one of:
-  - `pending`
-  - `accepted`
-  - `rejected`
-
-Constraints:
-
-- primary key on `id`
-- foreign key `artifact_id -> artifacts(id)`
-- foreign key `proposed_by_run_id -> runs(id)`
-- `relevance` must be an integer from `1` to `3`
-
-### `runs`
-
-Stores batch-level execution metadata for Curio processing runs.
-
-Columns:
-
-- `id`
-- `trigger_mode`
-- `started_at`
-- `completed_at`
-- `status`
-- `requested_batch_size`
-- `processed_artifact_count`
-- `categorized_artifact_count`
-- `error_artifact_count`
-- `schema_version`
-- `prompt_version`
-- `vocabulary_version`
-- `notes`
-- `created_at`
-- `updated_at`
-
-Notes:
-
-- `trigger_mode` is one of:
-  - `manual`
-  - `automation`
-- `status` is one of:
-  - `running`
-  - `succeeded`
-  - `partial`
-  - `failed`
-
-Constraints:
-
-- primary key on `id`
-- `requested_batch_size`, `processed_artifact_count`, `categorized_artifact_count`, and `error_artifact_count` must be non-negative integers
-
-### `categories_view`
-
-Derived wide sheet for human scanning, sorting, and filtering.
+- `Title`
+- `Creator`
+- `Source Language`
+- `Summary EN`
+- `Importance`
+- `Labels`
+- `Proposals`
+- `Warnings`
+- `JSON URL`
+
+Semantics:
+
+- `Evaluated At` is the UTC time the evaluation row was written.
+- `Source` is the exact upstream artifact identity from `downloads.Source`.
+- `Title`, `Creator`, `Source Language`, and `Summary EN` are compact accepted summary fields for that evaluation.
+- `Importance` is a float from `0.0` to `1.0`.
+- `Labels` stores compact accepted label-score pairs for that evaluation, using canonical prefixed labels.
+- `Proposals` stores compact proposed-label entries from that evaluation, also using the prefixed label convention.
+- `Warnings` is an optional compact warning field for non-fatal issues observed during evaluation or dossier assembly.
+- `JSON URL` points to the full Drive payload when one exists.
+- Curio appends a new row only when it produces a persistable accepted evaluation for that `Source`.
+- Duplicate-source skipping is a preflight no-op, not a new `evaluations` row.
+- Hard `skipped` and hard `error` outcomes do not land in Sheets.
+- Accepted-with-warning outcomes still land in `evaluations`.
+
+Representation notes:
+
+- `Labels`, `Proposals`, and `Warnings` should stay compact enough for Sheets cells.
+- `Warnings` should be short operator-facing text or compact warning codes, not a dump of full diagnostics.
+- Full rationale text, translation detail, dossier content, and artifact-specific extraction detail belong in the Drive JSON payload, not in Sheets.
+
+### `catalog`
+
+The compact derived human-facing tab for normal filtering and search.
 
 This tab is not canonical.
 
-It should be rebuilt from `downloads`, `artifacts`, `concepts`, `artifact_concepts`, `entities`, and `artifact_entities`.
+It should contain one row per `Source`, using the persisted row from `evaluations`.
 
-Recommended fixed columns:
+Recommended columns:
 
 - `Date`
 - `X Date`
@@ -521,39 +184,29 @@ Recommended fixed columns:
 - `Column`
 - `Type`
 - `Object`
-- `artifact_id`
-- `evaluation_status`
-- `categorized_at`
-- `title`
-- `creator`
-- `source_language`
-- `summary_en`
-- `overall_importance`
-- `entities`
-- `latest_json_url`
-- `latest_run_id`
+- `Evaluated At`
+- `Title`
+- `Creator`
+- `Source Language`
+- `Summary EN`
+- `Importance`
+- `Labels`
+- `Proposals`
+- `Warnings`
+- `JSON URL`
 
-`entities` should be a compact human-readable list of canonical entity names or ids for the artifact.
+Semantics:
 
-After the fixed columns, `categories_view` should add one column per active concept `id`.
-
-Cell semantics for dynamic concept columns:
-
-- blank means the concept does not directly apply
-- `1`, `2`, or `3` means the accepted direct concept relevance
-
-Implementation notes:
-
-- upstream provenance columns in this view should retain the exact `downloads` header names
-- dynamic concept columns should be generated in a stable order, preferably the row order of active concepts in `concepts`
-- `categories_view` is concept-centric in v1; entity state is summarized in the fixed `entities` column rather than exploded into one column per entity
+- upstream provenance columns should retain the exact `downloads` header names
+- each row represents the persisted Curio view for that `Source`
+- this tab is intentionally compact; it is not a one-column-per-label matrix
+- normal human filtering and search should happen here
 
 ## Open Questions Intentionally Left Outside This Doc
 
 This schema doc does not settle:
 
-- the initial concept registry contents
-- the initial entity registry contents
-- the exact artifact-key derivation algorithm
-- the initial automation batch size
-- whether Curio needs a second derived view focused on entity-centric browsing
+- the initial contents of the canonical `labels` registry
+- the exact compact encoding used inside the `Labels` and `Proposals` cells
+- the follow-on simplification of the JSON payload docs
+- whether a future backend should replace Google Sheets if Curio later needs stronger relational behavior
