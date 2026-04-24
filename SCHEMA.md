@@ -88,13 +88,14 @@ That payload is the full audit artifact for the evaluation and should contain:
 
 - the dossier used for evaluation
 - the model's structured output
+- paired English dossier blocks when Curio translated non-English source text for evaluation
 - any artifact-type-specific details that do not fit cleanly into Sheets cells
 
 Google Sheets should store only compact summary state plus a pointer to the Drive JSON payload.
 
 The current Drive-payload contract is defined in [JSON-PAYLOAD.md](/Users/zeph/github/tzaffi/curio/JSON-PAYLOAD.md) and [schemas/evaluation_payload.schema.json](/Users/zeph/github/tzaffi/curio/schemas/evaluation_payload.schema.json).
 
-Those payload docs will need a matching simplification next. This schema doc does not attempt to redefine them.
+Translation behavior within the payload is defined in [TRANSLATE.md](/Users/zeph/github/tzaffi/curio/TRANSLATE.md). This schema doc does not attempt to redefine it.
 
 ## Tabs
 
@@ -151,6 +152,7 @@ Semantics:
 - `Evaluated At` is the UTC time the evaluation row was written.
 - `Source` is the exact upstream artifact identity from `downloads.Source`.
 - `Title`, `Creator`, `Source Language`, and `Summary EN` are compact accepted summary fields for that evaluation.
+- `Summary EN` is the compact English summary field; when Curio translated non-English source text, the full translated text belongs in the Drive JSON payload under `dossier_snapshot.evidence_text`, not in Sheets.
 - `Importance` is a float from `0.0` to `1.0`.
 - `Labels` stores compact accepted label-score pairs for that evaluation, using canonical prefixed labels.
 - `Proposals` stores compact proposed-label entries from that evaluation, also using the prefixed label convention.
@@ -165,7 +167,7 @@ Representation notes:
 
 - `Labels`, `Proposals`, and `Warnings` should stay compact enough for Sheets cells.
 - `Warnings` should be short operator-facing text or compact warning codes, not a dump of full diagnostics.
-- Full rationale text, translation detail, dossier content, and artifact-specific extraction detail belong in the Drive JSON payload, not in Sheets.
+- Full rationale text, full translated dossier text, dossier content, and artifact-specific extraction detail belong in the Drive JSON payload, not in Sheets.
 
 ### `catalog`
 

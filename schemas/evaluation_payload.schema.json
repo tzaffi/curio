@@ -171,15 +171,37 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "block_id",
         "name",
+        "language",
+        "translation_of",
         "text",
         "was_truncated",
         "original_char_count"
       ],
       "properties": {
+        "block_id": {
+          "type": "integer",
+          "minimum": 1
+        },
         "name": {
           "type": "string",
           "minLength": 1
+        },
+        "language": {
+          "type": "string",
+          "minLength": 1
+        },
+        "translation_of": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "text": {
           "type": "string"
@@ -191,7 +213,29 @@
           "type": "integer",
           "minimum": 0
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "translation_of": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "translation_of"
+            ]
+          },
+          "then": {
+            "properties": {
+              "language": {
+                "type": "string",
+                "pattern": "^en($|-.*)"
+              }
+            }
+          }
+        }
+      ]
     },
     "dossierSnapshot": {
       "type": "object",
@@ -386,7 +430,6 @@
         "creator",
         "source_language",
         "summary_en",
-        "translation_excerpt_en",
         "importance",
         "labels",
         "proposals",
@@ -407,9 +450,6 @@
         "summary_en": {
           "type": "string",
           "minLength": 1
-        },
-        "translation_excerpt_en": {
-          "$ref": "#/$defs/nullableNonEmptyString"
         },
         "importance": {
           "$ref": "#/$defs/importance"
