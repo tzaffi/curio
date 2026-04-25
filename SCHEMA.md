@@ -16,12 +16,15 @@ This document is normative for:
 This document is not the place to define:
 
 - the detailed JSON payload contract
+- detailed translation policy
+- LLM provider calling policy
+- CLI subcommand flags
 - prompt wording
 - artifact-dossier extraction logic
 - Codex automation scheduling
 - Python module boundaries
 
-Those belong in [JSON-PAYLOAD.md](/Users/zeph/github/tzaffi/curio/JSON-PAYLOAD.md), prompt files, automation docs, and ADRs.
+Those belong in [JSON-PAYLOAD.md](/Users/zeph/github/tzaffi/curio/JSON-PAYLOAD.md), [TRANSLATE.md](/Users/zeph/github/tzaffi/curio/TRANSLATE.md), [LLM-CALLER.md](/Users/zeph/github/tzaffi/curio/LLM-CALLER.md), [CLI.md](/Users/zeph/github/tzaffi/curio/CLI.md), prompt files, automation docs, and ADRs.
 
 ## Design Principles
 

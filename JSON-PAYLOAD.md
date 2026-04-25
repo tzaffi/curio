@@ -19,11 +19,13 @@ This document is not the place to define:
 
 - the Google Sheets workbook model
 - detailed translation policy
+- LLM provider calling policy
+- CLI subcommand flags
 - prompt wording
 - the exact label-registry contents
 - the exact artifact-key derivation algorithm
 
-Those belong in [SCHEMA.md](/Users/zeph/github/tzaffi/curio/SCHEMA.md), [TRANSLATE.md](/Users/zeph/github/tzaffi/curio/TRANSLATE.md), registry files, prompt files, and future ADRs.
+Those belong in [SCHEMA.md](/Users/zeph/github/tzaffi/curio/SCHEMA.md), [TRANSLATE.md](/Users/zeph/github/tzaffi/curio/TRANSLATE.md), [LLM-CALLER.md](/Users/zeph/github/tzaffi/curio/LLM-CALLER.md), [CLI.md](/Users/zeph/github/tzaffi/curio/CLI.md), registry files, prompt files, and future ADRs.
 
 ## Design Principles
 
