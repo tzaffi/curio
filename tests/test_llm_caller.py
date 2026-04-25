@@ -18,7 +18,7 @@ from curio.llm_caller import (
     TextContentPart,
     UnsupportedCapabilityError,
 )
-from curio.schemas import SchemaName, validate_json
+from curio.schemas import SchemaName, SchemaValidationError, validate_json
 
 
 def make_usage() -> LlmUsage:
@@ -85,6 +85,22 @@ def test_llm_request_serializes_to_schema_payload() -> None:
     validate_json(payload, SchemaName.LLM_REQUEST)
 
 
+def test_llm_request_parses_from_schema_payload() -> None:
+    payload = make_request().to_json()
+
+    request = LlmRequest.from_json(payload)
+
+    assert request == make_request()
+
+
+def test_llm_request_from_json_rejects_schema_invalid_payload() -> None:
+    payload = make_request().to_json()
+    payload["required_capabilities"] = ["chatgpt_auth"]
+
+    with pytest.raises(SchemaValidationError, match="chatgpt_auth"):
+        LlmRequest.from_json(payload)
+
+
 def test_llm_request_preserves_accepted_string_values() -> None:
     request = LlmRequest(
         request_id=" translate-test ",
@@ -112,6 +128,14 @@ def test_llm_response_serializes_to_schema_payload() -> None:
     validate_json(payload, SchemaName.LLM_RESPONSE)
 
 
+def test_llm_response_parses_from_schema_payload() -> None:
+    payload = make_response().to_json()
+
+    response = LlmResponse.from_json(payload)
+
+    assert response == make_response()
+
+
 def test_llm_response_allows_null_output_for_non_success_status() -> None:
     response = LlmResponse(
         request_id="translate-test",
@@ -123,6 +147,19 @@ def test_llm_response_allows_null_output_for_non_success_status() -> None:
     )
 
     validate_json(response.to_json(), SchemaName.LLM_RESPONSE)
+
+
+def test_llm_response_from_json_allows_null_output() -> None:
+    response = LlmResponse(
+        request_id="translate-test",
+        status=LlmStatus.FAILED,
+        provider=ProviderName.OPENAI_API,
+        model=None,
+        output=None,
+        usage=make_usage(),
+    )
+
+    assert LlmResponse.from_json(response.to_json()) == response
 
 
 def test_llm_client_protocol_accepts_fake_client() -> None:
@@ -162,6 +199,58 @@ def test_unsupported_capability_error_handles_no_missing_capabilities() -> None:
 def test_llm_message_rejects_empty_content() -> None:
     with pytest.raises(ValueError, match="content must not be empty"):
         LlmMessage(role="user", content=[])
+
+
+def test_llm_nested_models_parse_from_json() -> None:
+    assert TextContentPart.from_json({"type": "text", "text": "hello"}) == TextContentPart(text="hello")
+    assert LlmMessage.from_json(
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "hello"}],
+        }
+    ) == LlmMessage(role=LlmMessageRole.ASSISTANT, content=[TextContentPart(text="hello")])
+    assert JsonSchemaOutput.from_json(
+        {
+            "type": "json_schema",
+            "name": "output",
+            "schema": {"type": "object"},
+            "strict": True,
+        }
+    ) == JsonSchemaOutput(name="output", schema={"type": "object"}, strict=True)
+    assert MeteredObject.from_json({"name": "image", "quantity": 1, "unit": "count"}) == MeteredObject(
+        name="image",
+        quantity=1,
+        unit="count",
+    )
+    assert LlmUsage.from_json(make_usage().to_json()) == make_usage()
+    assert LlmOutput.from_json({"type": "json", "value": {"ok": True}}) == LlmOutput(value={"ok": True})
+
+
+def test_llm_nested_parsers_reject_invalid_shapes() -> None:
+    with pytest.raises(ValueError, match="type must be text"):
+        TextContentPart.from_json({"type": "image", "text": "hello"})
+
+    with pytest.raises(ValueError, match="text is required"):
+        TextContentPart.from_json({"type": "text"})
+
+    with pytest.raises(ValueError, match="content must be a list"):
+        LlmMessage.from_json({"role": "user", "content": {}})
+
+    with pytest.raises(ValueError, match="strict must be a boolean"):
+        JsonSchemaOutput.from_json(
+            {
+                "type": "json_schema",
+                "name": "output",
+                "schema": {},
+                "strict": "true",
+            }
+        )
+
+    with pytest.raises(ValueError, match="type must be json_schema"):
+        JsonSchemaOutput.from_json({"type": "json", "name": "output", "schema": {}, "strict": True})
+
+    with pytest.raises(ValueError, match="type must be json"):
+        LlmOutput.from_json({"type": "text", "value": "hello"})
 
 
 def test_llm_request_rejects_empty_input() -> None:

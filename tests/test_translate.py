@@ -1,14 +1,22 @@
+from collections.abc import Sequence
 from typing import cast
 
 import pytest
 
-from curio.llm_caller import LlmUsage, MeteredObject, ProviderName
-from curio.schemas import SchemaName, validate_json
+import curio.translate as translate
+from curio.llm_caller import (
+    LlmOutput,
+    LlmRequest,
+    LlmResponse,
+    LlmUsage,
+    MeteredObject,
+    ProviderName,
+)
+from curio.schemas import SchemaName, SchemaValidationError, validate_json
 from curio.translate import (
     Block,
     LlmSummary,
     TranslatedBlock,
-    TranslationNotImplementedError,
     TranslationRequest,
     TranslationRequestError,
     TranslationResponse,
@@ -57,6 +65,52 @@ def make_summary() -> LlmSummary:
     return LlmSummary(provider="codex_cli", model="gpt-test", usage=make_usage())
 
 
+class RecordingLlmClient:
+    def __init__(self, response: LlmResponse) -> None:
+        self.response = response
+        self.requests: list[LlmRequest] = []
+
+    def complete(self, request: LlmRequest) -> LlmResponse:
+        self.requests.append(request)
+        return self.response
+
+
+def make_llm_response(
+    output_value: object,
+    *,
+    warnings: Sequence[str] = (),
+    request_id: str = "translate-test",
+) -> LlmResponse:
+    return LlmResponse(
+        request_id=request_id,
+        status="succeeded",
+        provider="codex_cli",
+        model="gpt-test",
+        output=LlmOutput(value=output_value),
+        usage=make_usage(),
+        warnings=warnings,
+    )
+
+
+def test_translate_root_exports_public_service_contracts() -> None:
+    assert translate.__all__ == [
+        "DEFAULT_ENGLISH_CONFIDENCE_THRESHOLD",
+        "DEFAULT_TARGET_LANGUAGE",
+        "TRANSLATION_REQUEST_VERSION",
+        "TRANSLATION_RESPONSE_VERSION",
+        "Block",
+        "LlmSummary",
+        "TranslatedBlock",
+        "TranslationError",
+        "TranslationRequest",
+        "TranslationRequestError",
+        "TranslationResponse",
+        "TranslationResponseError",
+        "TranslationService",
+        "counts_as_english",
+    ]
+
+
 def test_counts_as_english_requires_language_and_threshold() -> None:
     assert counts_as_english("en-US", 0.91, 0.9) is True
     assert counts_as_english("en", 0.89, 0.9) is False
@@ -83,6 +137,22 @@ def test_translation_request_serializes_to_schema_payload() -> None:
     assert payload["translation_request_version"] == "curio-translation-request.v1"
     assert payload["blocks"][0]["context"] == {"artifact_kind": "tweet_json"}
     validate_json(payload, SchemaName.TRANSLATION_REQUEST)
+
+
+def test_translation_request_parses_from_schema_payload() -> None:
+    payload = make_request().to_json()
+
+    request = TranslationRequest.from_json(payload)
+
+    assert request == make_request()
+
+
+def test_translation_request_from_json_rejects_schema_invalid_payload() -> None:
+    payload = make_request().to_json()
+    payload["target_language"] = "fr"
+
+    with pytest.raises(SchemaValidationError, match="translation_request"):
+        TranslationRequest.from_json(payload)
 
 
 def test_translation_request_preserves_accepted_string_values() -> None:
@@ -131,6 +201,26 @@ def test_translation_response_serializes_to_schema_payload() -> None:
     validate_json(payload, SchemaName.TRANSLATION_RESPONSE)
 
 
+def test_translation_response_parses_from_schema_payload() -> None:
+    response = TranslationResponse(
+        request_id="translate-test",
+        blocks=[
+            TranslatedBlock(
+                block_id=1,
+                name="tweet_text",
+                detected_language="ja",
+                english_confidence_estimate=0.01,
+                translation_required=True,
+                translated_text="Today we are releasing a new model.",
+            )
+        ],
+        llm=make_summary(),
+        warnings=["request warning"],
+    )
+
+    assert TranslationResponse.from_json(response.to_json()) == response
+
+
 def test_english_translated_block_serializes_to_null_translation() -> None:
     block = TranslatedBlock(
         block_id=1,
@@ -142,6 +232,71 @@ def test_english_translated_block_serializes_to_null_translation() -> None:
     )
 
     assert block.to_json()["translated_text"] is None
+
+
+def test_translation_nested_models_parse_from_json() -> None:
+    assert Block.from_json(make_block().to_json()) == make_block()
+    assert TranslatedBlock.from_json(
+        {
+            "block_id": 1,
+            "name": "tweet_text",
+            "detected_language": "en",
+            "english_confidence_estimate": 0.99,
+            "translation_required": False,
+            "translated_text": None,
+            "warnings": [],
+        }
+    ) == TranslatedBlock(
+        block_id=1,
+        name="tweet_text",
+        detected_language="en",
+        english_confidence_estimate=0.99,
+        translation_required=False,
+        translated_text=None,
+    )
+    assert LlmSummary.from_json(make_summary().to_json()) == make_summary()
+
+
+def test_translation_nested_parsers_reject_invalid_shapes() -> None:
+    with pytest.raises(ValueError, match="block_id is required"):
+        Block.from_json({"name": "tweet_text", "source_language_hint": None, "text": "hello"})
+
+    with pytest.raises(ValueError, match="context must be an object"):
+        Block.from_json(
+            {
+                "block_id": 1,
+                "name": "tweet_text",
+                "source_language_hint": None,
+                "text": "hello",
+                "context": [],
+            }
+        )
+
+    with pytest.raises(ValueError, match="translation_required must be a boolean"):
+        TranslatedBlock.from_json(
+            {
+                "block_id": 1,
+                "name": "tweet_text",
+                "detected_language": "ja",
+                "english_confidence_estimate": 0.01,
+                "translation_required": 1,
+                "translated_text": "Translated text.",
+                "warnings": [],
+            }
+        )
+
+    with pytest.raises(ValueError, match="warnings must be a list"):
+        TranslatedBlock.from_json(
+            {
+                "block_id": 1,
+                "name": "tweet_text",
+                "detected_language": "ja",
+                "english_confidence_estimate": 0.01,
+                "translation_required": True,
+                "translated_text": "Translated text.",
+                "warnings": {},
+            }
+        )
 
 
 def test_block_rejects_invalid_fields() -> None:
@@ -261,11 +416,70 @@ def test_llm_summary_rejects_empty_model() -> None:
         LlmSummary(provider="codex_cli", model="", usage=make_usage())
 
 
-def test_translation_service_is_boundary_only_for_this_checkpoint() -> None:
-    class FakeClient:
-        pass
+def test_translation_service_calls_injected_llm_client_and_assembles_response() -> None:
+    client = RecordingLlmClient(
+        make_llm_response(
+            {
+                "request_id": "translate-test",
+                "blocks": [
+                    {
+                        "block_id": 1,
+                        "name": "tweet_text",
+                        "detected_language": "ja",
+                        "english_confidence_estimate": 0.01,
+                        "translation_required": True,
+                        "translated_text": "Today we are releasing a new model.",
+                        "warnings": ["partial nuance warning"],
+                    }
+                ],
+            },
+            warnings=["provider warning"],
+        )
+    )
+    service = TranslationService(llm_client=client)
 
-    service = TranslationService(llm_client=FakeClient())
+    response = service.translate(make_request())
 
-    with pytest.raises(TranslationNotImplementedError, match="next checkpoint"):
-        service.translate(make_request())
+    assert len(client.requests) == 1
+    assert client.requests[0].request_id == "translate-test"
+    assert client.requests[0].workflow == "translate"
+    assert response == TranslationResponse(
+        request_id="translate-test",
+        blocks=[
+            TranslatedBlock(
+                block_id=1,
+                name="tweet_text",
+                detected_language="ja",
+                english_confidence_estimate=0.01,
+                translation_required=True,
+                translated_text="Today we are releasing a new model.",
+                warnings=["partial nuance warning"],
+            )
+        ],
+        llm=LlmSummary(provider="codex_cli", model="gpt-test", usage=make_usage()),
+        warnings=["provider warning"],
+    )
+
+
+def test_translation_service_propagates_validation_errors() -> None:
+    client = RecordingLlmClient(
+        make_llm_response(
+            {
+                "request_id": "translate-test",
+                "blocks": [
+                    {
+                        "block_id": 1,
+                        "name": "tweet_text",
+                        "detected_language": "en",
+                        "english_confidence_estimate": 0.99,
+                        "translation_required": True,
+                        "translated_text": "Should not translate.",
+                        "warnings": [],
+                    }
+                ],
+            }
+        )
+    )
+
+    with pytest.raises(TranslationResponseError, match="counts as English"):
+        TranslationService(llm_client=client).translate(make_request())

@@ -3,6 +3,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol, cast
 
+from curio.schemas import SchemaName, validate_json
+
 JsonObject = dict[str, Any]
 JsonValue = Any
 
@@ -107,6 +109,12 @@ def _require_non_negative_number(value: object, field_name: str) -> float | int:
     return value
 
 
+def _require_bool(value: object, field_name: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a boolean")
+    return value
+
+
 def _require_optional_non_negative_number(value: object, field_name: str) -> float | int | None:
     if value is None:
         return None
@@ -117,6 +125,18 @@ def _require_mapping(value: object, field_name: str) -> Mapping[str, JsonValue]:
     if not isinstance(value, Mapping):
         raise ValueError(f"{field_name} must be an object")
     return cast(Mapping[str, JsonValue], value)
+
+
+def _require_list(value: object, field_name: str) -> list[object]:
+    if not isinstance(value, list):
+        raise ValueError(f"{field_name} must be a list")
+    return cast(list[object], value)
+
+
+def _require_field(payload: Mapping[str, JsonValue], field_name: str) -> JsonValue:
+    if field_name not in payload:
+        raise ValueError(f"{field_name} is required")
+    return payload[field_name]
 
 
 def _coerce_capabilities(values: Sequence[LlmCapability | str]) -> tuple[LlmCapability, ...]:
@@ -142,6 +162,14 @@ class TextContentPart:
     def __post_init__(self) -> None:
         _require_string(self.text, "text")
 
+    @classmethod
+    def from_json(cls, value: object) -> "TextContentPart":
+        payload = _require_mapping(value, "content part")
+        part_type = _require_string(_require_field(payload, "type"), "type")
+        if part_type != "text":
+            raise ValueError("type must be text")
+        return cls(text=_require_string(_require_field(payload, "text"), "text"))
+
     def to_json(self) -> JsonObject:
         return {"type": "text", "text": self.text}
 
@@ -157,6 +185,17 @@ class LlmMessage:
         if not content:
             raise ValueError("content must not be empty")
         object.__setattr__(self, "content", content)
+
+    @classmethod
+    def from_json(cls, value: object) -> "LlmMessage":
+        payload = _require_mapping(value, "message")
+        return cls(
+            role=_require_string(_require_field(payload, "role"), "role"),
+            content=[
+                TextContentPart.from_json(part)
+                for part in _require_list(_require_field(payload, "content"), "content")
+            ],
+        )
 
     def to_json(self) -> JsonObject:
         role = cast(LlmMessageRole, self.role)
@@ -174,7 +213,20 @@ class JsonSchemaOutput:
 
     def __post_init__(self) -> None:
         _require_string(self.name, "name")
+        _require_bool(self.strict, "strict")
         object.__setattr__(self, "schema", dict(_require_mapping(self.schema, "schema")))
+
+    @classmethod
+    def from_json(cls, value: object) -> "JsonSchemaOutput":
+        payload = _require_mapping(value, "output")
+        output_type = _require_string(_require_field(payload, "type"), "type")
+        if output_type != "json_schema":
+            raise ValueError("type must be json_schema")
+        return cls(
+            name=_require_string(_require_field(payload, "name"), "name"),
+            schema=_require_mapping(_require_field(payload, "schema"), "schema"),
+            strict=_require_bool(_require_field(payload, "strict"), "strict"),
+        )
 
     def to_json(self) -> JsonObject:
         return {
@@ -212,6 +264,31 @@ class LlmRequest:
         object.__setattr__(self, "required_capabilities", _coerce_capabilities(self.required_capabilities))
         object.__setattr__(self, "metadata", dict(_require_mapping(self.metadata, "metadata")))
 
+    @classmethod
+    def from_json(cls, value: object) -> "LlmRequest":
+        validate_json(value, SchemaName.LLM_REQUEST)
+        payload = _require_mapping(value, "llm request")
+        return cls(
+            request_id=_require_string(_require_field(payload, "request_id"), "request_id"),
+            workflow=_require_string(_require_field(payload, "workflow"), "workflow"),
+            model=cast(str | None, _require_field(payload, "model")),
+            instructions=_require_string(_require_field(payload, "instructions"), "instructions"),
+            input=[
+                LlmMessage.from_json(message)
+                for message in _require_list(_require_field(payload, "input"), "input")
+            ],
+            output=JsonSchemaOutput.from_json(_require_field(payload, "output")),
+            required_capabilities=[
+                LlmCapability(_require_string(capability, "capability"))
+                for capability in _require_list(
+                    _require_field(payload, "required_capabilities"),
+                    "required_capabilities",
+                )
+            ],
+            timeout_seconds=_require_positive_int(_require_field(payload, "timeout_seconds"), "timeout_seconds"),
+            metadata=_require_mapping(_require_field(payload, "metadata"), "metadata"),
+        )
+
     def to_json(self) -> JsonObject:
         required_capabilities = cast(tuple[LlmCapability, ...], self.required_capabilities)
         return {
@@ -238,6 +315,15 @@ class MeteredObject:
         _require_string(self.name, "name")
         _require_non_negative_number(self.quantity, "quantity")
         _require_string(self.unit, "unit")
+
+    @classmethod
+    def from_json(cls, value: object) -> "MeteredObject":
+        payload = _require_mapping(value, "metered object")
+        return cls(
+            name=_require_string(_require_field(payload, "name"), "name"),
+            quantity=_require_non_negative_number(_require_field(payload, "quantity"), "quantity"),
+            unit=_require_string(_require_field(payload, "unit"), "unit"),
+        )
 
     def to_json(self) -> JsonObject:
         return {"name": self.name, "quantity": self.quantity, "unit": self.unit}
@@ -268,6 +354,43 @@ class LlmUsage:
         _require_optional_non_negative_number(self.thinking_seconds, "thinking_seconds")
         object.__setattr__(self, "metered_objects", tuple(self.metered_objects))
 
+    @classmethod
+    def from_json(cls, value: object) -> "LlmUsage":
+        payload = _require_mapping(value, "usage")
+        return cls(
+            input_tokens=_require_optional_non_negative_number(
+                _require_field(payload, "input_tokens"),
+                "input_tokens",
+            ),
+            cached_input_tokens=_require_optional_non_negative_number(
+                _require_field(payload, "cached_input_tokens"),
+                "cached_input_tokens",
+            ),
+            output_tokens=_require_optional_non_negative_number(
+                _require_field(payload, "output_tokens"),
+                "output_tokens",
+            ),
+            reasoning_tokens=_require_optional_non_negative_number(
+                _require_field(payload, "reasoning_tokens"),
+                "reasoning_tokens",
+            ),
+            total_tokens=_require_optional_non_negative_number(
+                _require_field(payload, "total_tokens"),
+                "total_tokens",
+            ),
+            metered_objects=[
+                MeteredObject.from_json(metered)
+                for metered in _require_list(_require_field(payload, "metered_objects"), "metered_objects")
+            ],
+            started_at=_require_string(_require_field(payload, "started_at"), "started_at"),
+            completed_at=_require_string(_require_field(payload, "completed_at"), "completed_at"),
+            wall_seconds=_require_non_negative_number(_require_field(payload, "wall_seconds"), "wall_seconds"),
+            thinking_seconds=_require_optional_non_negative_number(
+                _require_field(payload, "thinking_seconds"),
+                "thinking_seconds",
+            ),
+        )
+
     def to_json(self) -> JsonObject:
         return {
             "input_tokens": self.input_tokens,
@@ -286,6 +409,14 @@ class LlmUsage:
 @dataclass(frozen=True, slots=True)
 class LlmOutput:
     value: JsonValue
+
+    @classmethod
+    def from_json(cls, value: object) -> "LlmOutput":
+        payload = _require_mapping(value, "output")
+        output_type = _require_string(_require_field(payload, "type"), "type")
+        if output_type != "json":
+            raise ValueError("type must be json")
+        return cls(value=_require_field(payload, "value"))
 
     def to_json(self) -> JsonObject:
         return {"type": "json", "value": self.value}
@@ -309,6 +440,24 @@ class LlmResponse:
         if self.model is not None:
             _require_string(self.model, "model")
         object.__setattr__(self, "warnings", _coerce_warnings(self.warnings))
+
+    @classmethod
+    def from_json(cls, value: object) -> "LlmResponse":
+        validate_json(value, SchemaName.LLM_RESPONSE)
+        payload = _require_mapping(value, "llm response")
+        output = _require_field(payload, "output")
+        return cls(
+            request_id=_require_string(_require_field(payload, "request_id"), "request_id"),
+            status=_require_string(_require_field(payload, "status"), "status"),
+            provider=_require_string(_require_field(payload, "provider"), "provider"),
+            model=cast(str | None, _require_field(payload, "model")),
+            output=None if output is None else LlmOutput.from_json(output),
+            usage=LlmUsage.from_json(_require_field(payload, "usage")),
+            warnings=[
+                _require_string(warning, "warning")
+                for warning in _require_list(_require_field(payload, "warnings"), "warnings")
+            ],
+        )
 
     def to_json(self) -> JsonObject:
         status = cast(LlmStatus, self.status)

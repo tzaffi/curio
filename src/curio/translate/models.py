@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from typing import Any, cast
 
 from curio.llm_caller import LlmUsage, ProviderName
+from curio.schemas import SchemaName, validate_json
 
 JsonObject = dict[str, Any]
 JsonValue = Any
@@ -22,10 +23,6 @@ class TranslationRequestError(TranslationError):
 
 
 class TranslationResponseError(TranslationError):
-    pass
-
-
-class TranslationNotImplementedError(TranslationError):
     pass
 
 
@@ -53,10 +50,28 @@ def _require_probability(value: object, field_name: str) -> float | int:
     return value
 
 
+def _require_bool(value: object, field_name: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a boolean")
+    return value
+
+
 def _require_mapping(value: object, field_name: str) -> Mapping[str, JsonValue]:
     if not isinstance(value, Mapping):
         raise ValueError(f"{field_name} must be an object")
     return cast(Mapping[str, JsonValue], value)
+
+
+def _require_list(value: object, field_name: str) -> list[object]:
+    if not isinstance(value, list):
+        raise ValueError(f"{field_name} must be a list")
+    return cast(list[object], value)
+
+
+def _require_field(payload: Mapping[str, JsonValue], field_name: str) -> JsonValue:
+    if field_name not in payload:
+        raise ValueError(f"{field_name} is required")
+    return payload[field_name]
 
 
 def _coerce_warnings(values: Sequence[str]) -> tuple[str, ...]:
@@ -91,6 +106,20 @@ class Block:
             _require_string(self.source_language_hint, "source_language_hint")
         _require_string(self.text, "text")
         object.__setattr__(self, "context", dict(_require_mapping(self.context, "context")))
+
+    @classmethod
+    def from_json(cls, value: object) -> "Block":
+        payload = _require_mapping(value, "block")
+        source_language_hint = _require_field(payload, "source_language_hint")
+        return cls(
+            block_id=_require_positive_int(_require_field(payload, "block_id"), "block_id"),
+            name=_require_string(_require_field(payload, "name"), "name"),
+            source_language_hint=None
+            if source_language_hint is None
+            else _require_string(source_language_hint, "source_language_hint"),
+            text=_require_string(_require_field(payload, "text"), "text"),
+            context=_require_mapping(payload.get("context", {}), "context"),
+        )
 
     def to_json(self) -> JsonObject:
         return {
@@ -132,6 +161,27 @@ class TranslationRequest:
             _require_positive_int(self.timeout_seconds, "timeout_seconds")
         object.__setattr__(self, "blocks", blocks)
 
+    @classmethod
+    def from_json(cls, value: object) -> "TranslationRequest":
+        validate_json(value, SchemaName.TRANSLATION_REQUEST)
+        payload = _require_mapping(value, "translation request")
+        provider = payload.get("provider")
+        timeout_seconds = payload.get("timeout_seconds")
+        return cls(
+            request_id=_require_string(_require_field(payload, "request_id"), "request_id"),
+            target_language=_require_string(_require_field(payload, "target_language"), "target_language"),
+            english_confidence_threshold=_require_probability(
+                _require_field(payload, "english_confidence_threshold"),
+                "english_confidence_threshold",
+            ),
+            blocks=[Block.from_json(block) for block in _require_list(_require_field(payload, "blocks"), "blocks")],
+            provider=None if provider is None else _require_string(provider, "provider"),
+            model=cast(str | None, payload.get("model")),
+            timeout_seconds=None
+            if timeout_seconds is None
+            else _require_positive_int(timeout_seconds, "timeout_seconds"),
+        )
+
     def to_json(self) -> JsonObject:
         provider = None if self.provider is None else cast(ProviderName, self.provider)
         return {
@@ -161,6 +211,7 @@ class TranslatedBlock:
         _require_string(self.name, "name")
         _require_string(self.detected_language, "detected_language")
         _require_probability(self.english_confidence_estimate, "english_confidence_estimate")
+        _require_bool(self.translation_required, "translation_required")
         if self.translation_required and self.translated_text is None:
             raise TranslationResponseError("translated_text is required when translation_required is true")
         if not self.translation_required and self.translated_text is not None:
@@ -168,6 +219,26 @@ class TranslatedBlock:
         if self.translated_text is not None:
             _require_string(self.translated_text, "translated_text")
         object.__setattr__(self, "warnings", _coerce_warnings(self.warnings))
+
+    @classmethod
+    def from_json(cls, value: object) -> "TranslatedBlock":
+        payload = _require_mapping(value, "translated block")
+        translated_text = _require_field(payload, "translated_text")
+        return cls(
+            block_id=_require_positive_int(_require_field(payload, "block_id"), "block_id"),
+            name=_require_string(_require_field(payload, "name"), "name"),
+            detected_language=_require_string(_require_field(payload, "detected_language"), "detected_language"),
+            english_confidence_estimate=_require_probability(
+                _require_field(payload, "english_confidence_estimate"),
+                "english_confidence_estimate",
+            ),
+            translation_required=_require_bool(_require_field(payload, "translation_required"), "translation_required"),
+            translated_text=None if translated_text is None else _require_string(translated_text, "translated_text"),
+            warnings=[
+                _require_string(warning, "warning")
+                for warning in _require_list(_require_field(payload, "warnings"), "warnings")
+            ],
+        )
 
     def to_json(self) -> JsonObject:
         return {
@@ -191,6 +262,15 @@ class LlmSummary:
         object.__setattr__(self, "provider", ProviderName(self.provider))
         if self.model is not None:
             _require_string(self.model, "model")
+
+    @classmethod
+    def from_json(cls, value: object) -> "LlmSummary":
+        payload = _require_mapping(value, "llm")
+        return cls(
+            provider=_require_string(_require_field(payload, "provider"), "provider"),
+            model=cast(str | None, _require_field(payload, "model")),
+            usage=LlmUsage.from_json(_require_field(payload, "usage")),
+        )
 
     def to_json(self) -> JsonObject:
         provider = cast(ProviderName, self.provider)
@@ -219,6 +299,24 @@ class TranslationResponse:
             raise TranslationResponseError("blocks must not be empty")
         object.__setattr__(self, "blocks", blocks)
         object.__setattr__(self, "warnings", _coerce_warnings(self.warnings))
+
+    @classmethod
+    def from_json(cls, value: object) -> "TranslationResponse":
+        validate_json(value, SchemaName.TRANSLATION_RESPONSE)
+        payload = _require_mapping(value, "translation response")
+        return cls(
+            request_id=_require_string(_require_field(payload, "request_id"), "request_id"),
+            target_language=_require_string(_require_field(payload, "target_language"), "target_language"),
+            blocks=[
+                TranslatedBlock.from_json(block)
+                for block in _require_list(_require_field(payload, "blocks"), "blocks")
+            ],
+            llm=LlmSummary.from_json(_require_field(payload, "llm")),
+            warnings=[
+                _require_string(warning, "warning")
+                for warning in _require_list(_require_field(payload, "warnings"), "warnings")
+            ],
+        )
 
     def to_json(self) -> JsonObject:
         return {
