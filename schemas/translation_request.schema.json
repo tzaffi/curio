@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/tzaffi/curio/schemas/translation_request.schema.json",
+  "title": "Curio Translation Request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "translation_request_version",
+    "request_id",
+    "target_language",
+    "english_confidence_threshold",
+    "blocks"
+  ],
+  "properties": {
+    "translation_request_version": {
+      "const": "curio-translation-request.v1"
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "target_language": {
+      "const": "en"
+    },
+    "english_confidence_threshold": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "blocks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/block"
+      }
+    },
+    "provider": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "openai_api",
+            "codex_cli"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "model": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "timeout_seconds": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "nullableNonEmptyString": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "block": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "block_id",
+        "name",
+        "source_language_hint",
+        "text"
+      ],
+      "properties": {
+        "block_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_language_hint": {
+          "$ref": "#/$defs/nullableNonEmptyString"
+        },
+        "text": {
+          "type": "string"
+        },
+        "context": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    }
+  }
+}
