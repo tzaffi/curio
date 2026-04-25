@@ -17,6 +17,7 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: CPython",
 ]
 dependencies = [
+    "jsonschema>=4.26.0",
     "typer>=0.24.1",
 ]
 

@@ -92,8 +92,6 @@ Recommended v1 capabilities:
 - `cached_input_usage`
 - `reasoning_token_usage`
 - `thinking_time`
-- `chatgpt_auth`
-- `api_key_auth`
 - `subprocess`
 
 Requests may mark capabilities as required.
@@ -109,7 +107,7 @@ Translation should request usage fields, but it must tolerate missing optional a
 
 ## Authentication
 
-The LLM caller supports these auth modes in v1:
+Provider clients support these auth modes in v1:
 
 - `api_key`
   Used by `openai_api` and optionally by `codex_cli`.
@@ -121,6 +119,8 @@ The LLM caller supports these auth modes in v1:
 Provider auth resolution must be explicit in configuration or CLI flags.
 
 Auth config is owned by `curio.llm_caller` in v1. A separate Curio auth module should not be introduced unless another subsystem needs the same auth model.
+
+Authentication mode is provider configuration, not a workflow-requested capability. Curio workflows must not list auth modes in `required_capabilities`.
 
 The LLM caller must not:
 

@@ -1,0 +1,271 @@
+from typing import cast
+
+import pytest
+
+from curio.llm_caller import LlmUsage, MeteredObject, ProviderName
+from curio.schemas import SchemaName, validate_json
+from curio.translate import (
+    Block,
+    LlmSummary,
+    TranslatedBlock,
+    TranslationNotImplementedError,
+    TranslationRequest,
+    TranslationRequestError,
+    TranslationResponse,
+    TranslationResponseError,
+    TranslationService,
+    counts_as_english,
+)
+
+
+def make_usage() -> LlmUsage:
+    return LlmUsage(
+        input_tokens=100,
+        cached_input_tokens=80,
+        output_tokens=20,
+        reasoning_tokens=None,
+        total_tokens=120,
+        metered_objects=[MeteredObject(name="request", quantity=1, unit="count")],
+        started_at="2026-04-24T15:20:00Z",
+        completed_at="2026-04-24T15:20:01Z",
+        wall_seconds=1,
+        thinking_seconds=None,
+    )
+
+
+def make_block(block_id: int = 1) -> Block:
+    return Block(
+        block_id=block_id,
+        name="tweet_text",
+        source_language_hint="ja",
+        text="今日は新しいモデルを公開します。",
+        context={"artifact_kind": "tweet_json"},
+    )
+
+
+def make_request() -> TranslationRequest:
+    return TranslationRequest(
+        request_id="translate-test",
+        blocks=[make_block()],
+        provider="codex_cli",
+        model="gpt-test",
+        timeout_seconds=300,
+    )
+
+
+def make_summary() -> LlmSummary:
+    return LlmSummary(provider="codex_cli", model="gpt-test", usage=make_usage())
+
+
+def test_counts_as_english_requires_language_and_threshold() -> None:
+    assert counts_as_english("en-US", 0.91, 0.9) is True
+    assert counts_as_english("en", 0.89, 0.9) is False
+    assert counts_as_english("fr", 0.99, 0.9) is False
+
+
+def test_counts_as_english_rejects_invalid_values() -> None:
+    with pytest.raises(ValueError, match="detected_language must not be empty"):
+        counts_as_english(" ", 0.9, 0.9)
+
+    with pytest.raises(ValueError, match="english_confidence must be a number between 0 and 1"):
+        counts_as_english("en", -0.1, 0.9)
+
+    with pytest.raises(ValueError, match="english_confidence must be a number between 0 and 1"):
+        counts_as_english("en", cast(float, True), 0.9)
+
+
+def test_translation_request_serializes_to_schema_payload() -> None:
+    request = make_request()
+
+    payload = request.to_json()
+
+    assert request.provider == ProviderName.CODEX_CLI
+    assert payload["translation_request_version"] == "curio-translation-request.v1"
+    assert payload["blocks"][0]["context"] == {"artifact_kind": "tweet_json"}
+    validate_json(payload, SchemaName.TRANSLATION_REQUEST)
+
+
+def test_translation_request_preserves_accepted_string_values() -> None:
+    request = TranslationRequest(
+        request_id=" translate-test ",
+        blocks=[
+            Block(
+                block_id=1,
+                name=" tweet_text ",
+                source_language_hint=" ja ",
+                text=" text with intentional spacing ",
+            )
+        ],
+    )
+
+    payload = request.to_json()
+
+    assert payload["request_id"] == " translate-test "
+    assert payload["blocks"][0]["name"] == " tweet_text "
+    assert payload["blocks"][0]["source_language_hint"] == " ja "
+    assert payload["blocks"][0]["text"] == " text with intentional spacing "
+
+
+def test_translation_response_serializes_to_schema_payload() -> None:
+    response = TranslationResponse(
+        request_id="translate-test",
+        blocks=[
+            TranslatedBlock(
+                block_id=1,
+                name="tweet_text",
+                detected_language="ja",
+                english_confidence_estimate=0.01,
+                translation_required=True,
+                translated_text="Today we are releasing a new model.",
+                warnings=[],
+            )
+        ],
+        llm=make_summary(),
+        warnings=["request warning"],
+    )
+
+    payload = response.to_json()
+
+    assert payload["llm"]["provider"] == "codex_cli"
+    assert payload["blocks"][0]["translated_text"] == "Today we are releasing a new model."
+    validate_json(payload, SchemaName.TRANSLATION_RESPONSE)
+
+
+def test_english_translated_block_serializes_to_null_translation() -> None:
+    block = TranslatedBlock(
+        block_id=1,
+        name="tweet_text",
+        detected_language="en",
+        english_confidence_estimate=0.99,
+        translation_required=False,
+        translated_text=None,
+    )
+
+    assert block.to_json()["translated_text"] is None
+
+
+def test_block_rejects_invalid_fields() -> None:
+    with pytest.raises(ValueError, match="block_id must be a positive integer"):
+        Block(block_id=0, name="tweet_text", source_language_hint=None, text="")
+
+    with pytest.raises(ValueError, match="block_id must be a positive integer"):
+        Block(block_id=False, name="tweet_text", source_language_hint=None, text="text")
+
+    with pytest.raises(ValueError, match="source_language_hint must not be empty"):
+        Block(block_id=1, name="tweet_text", source_language_hint="", text="")
+
+    with pytest.raises(ValueError, match="text must not be empty"):
+        Block(block_id=1, name="tweet_text", source_language_hint=None, text=" ")
+
+    with pytest.raises(ValueError, match="context must be an object"):
+        Block(block_id=1, name="tweet_text", source_language_hint=None, text="text", context=cast(dict[str, object], []))
+
+
+def test_translation_request_rejects_invalid_fields() -> None:
+    with pytest.raises(TranslationRequestError, match="target_language must be en"):
+        TranslationRequest(request_id="translate-test", blocks=[make_block()], target_language="fr")
+
+    with pytest.raises(TranslationRequestError, match="blocks must not be empty"):
+        TranslationRequest(request_id="translate-test", blocks=[])
+
+    with pytest.raises(TranslationRequestError, match="block_id values must be unique"):
+        TranslationRequest(request_id="translate-test", blocks=[make_block(1), make_block(1)])
+
+    with pytest.raises(ValueError, match="request_id must be a string"):
+        TranslationRequest(request_id=cast(str, None), blocks=[make_block()])
+
+    with pytest.raises(ValueError, match="timeout_seconds must be a positive integer"):
+        TranslationRequest(request_id="translate-test", blocks=[make_block()], timeout_seconds=0)
+
+    with pytest.raises(ValueError, match="timeout_seconds must be a positive integer"):
+        TranslationRequest(request_id="translate-test", blocks=[make_block()], timeout_seconds=False)
+
+
+def test_translated_block_rejects_inconsistent_translation_state() -> None:
+    with pytest.raises(TranslationResponseError, match="translated_text is required"):
+        TranslatedBlock(
+            block_id=1,
+            name="tweet_text",
+            detected_language="ja",
+            english_confidence_estimate=0.01,
+            translation_required=True,
+            translated_text=None,
+        )
+
+    with pytest.raises(TranslationResponseError, match="translated_text must be null"):
+        TranslatedBlock(
+            block_id=1,
+            name="tweet_text",
+            detected_language="en",
+            english_confidence_estimate=0.99,
+            translation_required=False,
+            translated_text="Already English.",
+        )
+
+    with pytest.raises(ValueError, match="translated_text must not be empty"):
+        TranslatedBlock(
+            block_id=1,
+            name="tweet_text",
+            detected_language="ja",
+            english_confidence_estimate=0.01,
+            translation_required=True,
+            translated_text="",
+        )
+
+    with pytest.raises(ValueError, match="english_confidence_estimate must be a number between 0 and 1"):
+        TranslatedBlock(
+            block_id=1,
+            name="tweet_text",
+            detected_language="ja",
+            english_confidence_estimate=cast(float, True),
+            translation_required=True,
+            translated_text="Translated text.",
+        )
+
+    with pytest.raises(ValueError, match="warnings must be unique"):
+        TranslatedBlock(
+            block_id=1,
+            name="tweet_text",
+            detected_language="ja",
+            english_confidence_estimate=0.01,
+            translation_required=True,
+            translated_text="Translated text.",
+            warnings=["same", "same"],
+        )
+
+
+def test_translation_response_rejects_invalid_fields() -> None:
+    translated_block = TranslatedBlock(
+        block_id=1,
+        name="tweet_text",
+        detected_language="en",
+        english_confidence_estimate=0.99,
+        translation_required=False,
+        translated_text=None,
+    )
+
+    with pytest.raises(TranslationResponseError, match="target_language must be en"):
+        TranslationResponse(
+            request_id="translate-test",
+            blocks=[translated_block],
+            llm=make_summary(),
+            target_language="fr",
+        )
+
+    with pytest.raises(TranslationResponseError, match="blocks must not be empty"):
+        TranslationResponse(request_id="translate-test", blocks=[], llm=make_summary())
+
+
+def test_llm_summary_rejects_empty_model() -> None:
+    with pytest.raises(ValueError, match="model must not be empty"):
+        LlmSummary(provider="codex_cli", model="", usage=make_usage())
+
+
+def test_translation_service_is_boundary_only_for_this_checkpoint() -> None:
+    class FakeClient:
+        pass
+
+    service = TranslationService(llm_client=FakeClient())
+
+    with pytest.raises(TranslationNotImplementedError, match="next checkpoint"):
+        service.translate(make_request())

@@ -82,8 +82,6 @@
         "cached_input_usage",
         "reasoning_token_usage",
         "thinking_time",
-        "chatgpt_auth",
-        "api_key_auth",
         "subprocess"
       ]
     },
