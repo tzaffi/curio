@@ -4,16 +4,30 @@ from typing import cast
 
 import pytest
 
+import curio.llm_caller.codex_cli as codex_cli
 from curio.llm_caller import (
+    CODEX_CLI_CAPABILITIES,
+    CodexCliAuthConfig,
+    CodexCliAuthMode,
+    CodexCliClient,
+    CodexCliCommand,
     CodexCliExecConfig,
+    CodexCliRunResult,
     JsonSchemaOutput,
+    LlmConfigurationError,
     LlmInvalidOutputError,
     LlmMessage,
     LlmMessageRole,
+    LlmProviderNotFoundError,
+    LlmRejectedRequestError,
     LlmRequest,
+    LlmSchemaValidationError,
+    LlmTimeoutError,
     ProviderCallTiming,
     ProviderName,
+    SubprocessCodexCliRunner,
     TextContentPart,
+    UnsupportedCapabilityError,
     build_codex_exec_command,
     build_codex_exec_prompt,
     build_codex_llm_response,
@@ -21,7 +35,7 @@ from curio.llm_caller import (
 )
 
 
-def make_request(model: str | None = "gpt-test") -> LlmRequest:
+def make_request(model: str | None = "gpt-test", output_schema: dict[str, object] | None = None) -> LlmRequest:
     return LlmRequest(
         request_id="translate-test",
         workflow="translate",
@@ -31,7 +45,10 @@ def make_request(model: str | None = "gpt-test") -> LlmRequest:
             LlmMessage(role="system", content=[TextContentPart(text="System context.")]),
             LlmMessage(role="user", content=[TextContentPart(text="Bonjour."), TextContentPart(text="Salut.")]),
         ],
-        output=JsonSchemaOutput(name="curio_translation_model_output", schema={"type": "object"}),
+        output=JsonSchemaOutput(
+            name="curio_translation_model_output",
+            schema={"type": "object"} if output_schema is None else output_schema,
+        ),
         required_capabilities=["text_generation", "json_schema_output"],
         timeout_seconds=120,
         metadata={},
@@ -48,6 +65,37 @@ def make_timing() -> ProviderCallTiming:
 
 def jsonl(*events: object) -> str:
     return "\n".join(json.dumps(event) for event in events) + "\n"
+
+
+class FakeCodexCliRunner:
+    def __init__(
+        self,
+        stdout: str = "",
+        *,
+        stderr: str = "",
+        return_code: int = 0,
+        exception: Exception | None = None,
+    ) -> None:
+        self.stdout = stdout
+        self.stderr = stderr
+        self.return_code = return_code
+        self.exception = exception
+        self.calls: list[tuple[CodexCliCommand, int]] = []
+        self.schema_path: Path | None = None
+        self.schema_payload: object | None = None
+
+    def run(self, command: CodexCliCommand, timeout_seconds: int) -> CodexCliRunResult:
+        self.calls.append((command, timeout_seconds))
+        self.schema_path = Path(command.argv[command.argv.index("--output-schema") + 1])
+        self.schema_payload = json.loads(self.schema_path.read_text(encoding="utf-8"))
+        if self.exception is not None:
+            raise self.exception
+        return CodexCliRunResult(
+            stdout=self.stdout,
+            stderr=self.stderr,
+            return_code=self.return_code,
+            timing=make_timing(),
+        )
 
 
 def test_build_codex_exec_command_uses_stdin_prompt_and_safe_defaults() -> None:
@@ -295,3 +343,200 @@ def test_build_codex_llm_response_accepts_model_override() -> None:
     assert response.request_id == "translate-test"
     assert response.provider == ProviderName.CODEX_CLI
     assert make_request().input[0].role == LlmMessageRole.SYSTEM
+
+
+def test_codex_cli_client_calls_fake_runner_and_validates_schema(tmp_path: Path) -> None:
+    output_schema = {
+        "type": "object",
+        "required": ["ok"],
+        "properties": {"ok": {"type": "boolean"}},
+        "additionalProperties": False,
+    }
+    runner = FakeCodexCliRunner(
+        stdout=jsonl(
+            {"type": "agent_message", "text": json.dumps({"ok": True})},
+            {"type": "turn.completed", "usage": {"input_tokens": 6, "output_tokens": 2, "total_tokens": 8}},
+        )
+    )
+    client = CodexCliClient(
+        runner=runner,
+        output_schema_dir=tmp_path,
+        default_model="codex-default",
+    )
+
+    response = client.complete(make_request(model=None, output_schema=output_schema))
+
+    assert runner.schema_payload == output_schema
+    assert runner.schema_path is not None
+    assert not runner.schema_path.exists()
+    assert len(runner.calls) == 1
+    command, timeout_seconds = runner.calls[0]
+    assert timeout_seconds == 120
+    assert "--model" in command.argv
+    assert command.argv[command.argv.index("--model") + 1] == "codex-default"
+    assert command.argv[-1] == "-"
+    assert response.provider == ProviderName.CODEX_CLI
+    assert response.model == "codex-default"
+    assert response.output is not None
+    assert response.output.value == {"ok": True}
+    assert response.usage.total_tokens == 8
+
+
+def test_codex_cli_client_uses_chatgpt_cached_auth_without_curio_secret(tmp_path: Path) -> None:
+    runner = FakeCodexCliRunner(stdout=jsonl({"type": "agent_message", "text": "{}"}))
+    client = CodexCliClient(
+        runner=runner,
+        auth_config=CodexCliAuthConfig(mode=CodexCliAuthMode.CHATGPT),
+        output_schema_dir=tmp_path,
+    )
+
+    response = client.complete(make_request())
+
+    assert len(runner.calls) == 1
+    assert response.output is not None
+    assert response.output.value == {}
+
+
+def test_codex_cli_client_rejects_unsupported_capabilities_before_runner(tmp_path: Path) -> None:
+    runner = FakeCodexCliRunner(stdout=jsonl({"type": "agent_message", "text": "{}"}))
+    client = CodexCliClient(runner=runner, output_schema_dir=tmp_path)
+    request = LlmRequest(
+        request_id="translate-test",
+        workflow="translate",
+        model=None,
+        instructions="Return JSON.",
+        input=[LlmMessage(role="user", content=[TextContentPart(text="hi")])],
+        output=JsonSchemaOutput(name="output", schema={"type": "object"}),
+        required_capabilities=["thinking_time"],
+    )
+
+    with pytest.raises(UnsupportedCapabilityError, match="thinking_time"):
+        client.complete(request)
+
+    assert runner.calls == []
+    assert CODEX_CLI_CAPABILITIES == client.capabilities
+
+
+def test_codex_cli_client_keeps_api_key_handoff_isolated_before_runner(tmp_path: Path) -> None:
+    runner = FakeCodexCliRunner(stdout=jsonl({"type": "agent_message", "text": "{}"}))
+    client = CodexCliClient(
+        runner=runner,
+        auth_config=CodexCliAuthConfig(mode=CodexCliAuthMode.API_KEY),
+        output_schema_dir=tmp_path,
+    )
+
+    with pytest.raises(LlmConfigurationError, match="API-key handoff is not implemented"):
+        client.complete(make_request())
+
+    assert runner.calls == []
+
+
+def test_codex_cli_client_maps_runner_failures_and_exit_status(tmp_path: Path) -> None:
+    missing_runner = FakeCodexCliRunner(exception=FileNotFoundError("missing codex"))
+    missing_client = CodexCliClient(runner=missing_runner, output_schema_dir=tmp_path)
+    with pytest.raises(LlmProviderNotFoundError, match="codex_cli executable not found"):
+        missing_client.complete(make_request())
+    assert len(missing_runner.calls) == 1
+
+    timeout_runner = FakeCodexCliRunner(exception=TimeoutError("slow codex"))
+    timeout_client = CodexCliClient(runner=timeout_runner, output_schema_dir=tmp_path)
+    with pytest.raises(LlmTimeoutError, match="codex_cli subprocess timed out"):
+        timeout_client.complete(make_request())
+    assert len(timeout_runner.calls) == 1
+
+    failed_runner = FakeCodexCliRunner(stderr="secret-ish stderr", return_code=7)
+    failed_client = CodexCliClient(runner=failed_runner, output_schema_dir=tmp_path)
+    with pytest.raises(LlmRejectedRequestError) as failed:
+        failed_client.complete(make_request())
+    assert str(failed.value) == "codex_cli subprocess exited with status 7"
+    assert "secret-ish" not in str(failed.value)
+
+
+def test_codex_cli_client_reports_invalid_or_schema_invalid_output(tmp_path: Path) -> None:
+    invalid_runner = FakeCodexCliRunner(stdout=jsonl({"type": "agent_message", "text": "not json"}))
+    invalid_client = CodexCliClient(runner=invalid_runner, output_schema_dir=tmp_path)
+    with pytest.raises(LlmInvalidOutputError, match="final agent message is not valid JSON"):
+        invalid_client.complete(make_request())
+
+    schema_runner = FakeCodexCliRunner(stdout=jsonl({"type": "agent_message", "text": json.dumps({"ok": "yes"})}))
+    schema_client = CodexCliClient(runner=schema_runner, output_schema_dir=tmp_path)
+    with pytest.raises(LlmSchemaValidationError, match="output did not match requested schema"):
+        schema_client.complete(
+            make_request(
+                output_schema={
+                    "type": "object",
+                    "required": ["ok"],
+                    "properties": {"ok": {"type": "boolean"}},
+                }
+            )
+        )
+
+
+def test_codex_cli_run_result_rejects_invalid_shapes() -> None:
+    with pytest.raises(ValueError, match="stdout must be a string"):
+        CodexCliRunResult(stdout=cast(str, None), stderr="", return_code=0, timing=make_timing())
+
+    with pytest.raises(ValueError, match="stderr must be a string"):
+        CodexCliRunResult(stdout="", stderr=cast(str, None), return_code=0, timing=make_timing())
+
+    with pytest.raises(ValueError, match="return_code must be an integer"):
+        CodexCliRunResult(stdout="", stderr="", return_code=True, timing=make_timing())
+
+
+def test_subprocess_codex_cli_runner_uses_command_shape(monkeypatch: pytest.MonkeyPatch) -> None:
+    command = CodexCliCommand(argv=("codex", "exec", "-"), stdin_text="prompt")
+
+    def fake_run(
+        argv: tuple[str, ...],
+        *,
+        input: str,
+        capture_output: bool,
+        text: bool,
+        timeout: int,
+        check: bool,
+    ) -> codex_cli.subprocess.CompletedProcess[str]:
+        assert argv == command.argv
+        assert input == "prompt"
+        assert capture_output is True
+        assert text is True
+        assert timeout == 5
+        assert check is False
+        return codex_cli.subprocess.CompletedProcess(
+            args=argv,
+            returncode=0,
+            stdout=jsonl({"type": "agent_message", "text": "{}"}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(codex_cli.subprocess, "run", fake_run)
+
+    result = SubprocessCodexCliRunner().run(command, timeout_seconds=5)
+
+    assert result.return_code == 0
+    assert result.stderr == ""
+    assert result.stdout == jsonl({"type": "agent_message", "text": "{}"})
+    assert result.timing.wall_seconds >= 0
+
+
+def test_subprocess_codex_cli_runner_maps_subprocess_exceptions(monkeypatch: pytest.MonkeyPatch) -> None:
+    command = CodexCliCommand(argv=("codex", "exec", "-"), stdin_text="prompt")
+
+    def raise_missing(**kwargs: object) -> None:
+        del kwargs
+        raise FileNotFoundError("missing")
+
+    monkeypatch.setattr(codex_cli.subprocess, "run", lambda *args, **kwargs: raise_missing(**kwargs))
+    with pytest.raises(LlmProviderNotFoundError, match="codex_cli executable not found"):
+        SubprocessCodexCliRunner().run(command, timeout_seconds=5)
+
+    def raise_timeout(**kwargs: object) -> None:
+        del kwargs
+        raise codex_cli.subprocess.TimeoutExpired(cmd=command.argv, timeout=5)
+
+    monkeypatch.setattr(codex_cli.subprocess, "run", lambda *args, **kwargs: raise_timeout(**kwargs))
+    with pytest.raises(LlmTimeoutError, match="codex_cli subprocess timed out"):
+        SubprocessCodexCliRunner().run(command, timeout_seconds=5)
+
+
+def test_codex_cli_client_defaults_to_subprocess_runner() -> None:
+    assert isinstance(CodexCliClient().runner, SubprocessCodexCliRunner)

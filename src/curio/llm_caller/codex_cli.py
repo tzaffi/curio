@@ -1,28 +1,51 @@
 import json
+import subprocess
+import tempfile
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast
 
+from jsonschema import Draft202012Validator, FormatChecker
+from jsonschema.exceptions import ValidationError as JsonSchemaLibraryError
+
+from curio.llm_caller.auth import CodexCliAuthConfig, CodexCliAuthMode
 from curio.llm_caller.models import (
     JsonValue,
+    LlmCapability,
+    LlmConfigurationError,
     LlmInvalidOutputError,
     LlmMessage,
     LlmMessageRole,
+    LlmProviderNotFoundError,
+    LlmRejectedRequestError,
     LlmRequest,
     LlmResponse,
+    LlmSchemaValidationError,
+    LlmTimeoutError,
     ProviderName,
 )
 from curio.llm_caller.providers import (
     ProviderCallTiming,
+    ProviderClientBase,
+    ProviderClientConfig,
     build_json_llm_response,
     build_provider_usage,
+    measure_provider_call,
 )
 
 CODEX_CLI_DEFAULT_EXECUTABLE = "codex"
 CODEX_CLI_DEFAULT_SANDBOX = "read-only"
 CODEX_CLI_DEFAULT_COLOR = "never"
 CODEX_CLI_AGENT_MESSAGE_TYPES = frozenset(("agent_message", "assistant_message"))
+CODEX_CLI_CAPABILITIES = (
+    LlmCapability.TEXT_GENERATION,
+    LlmCapability.JSON_SCHEMA_OUTPUT,
+    LlmCapability.TOKEN_USAGE,
+    LlmCapability.CACHED_INPUT_USAGE,
+    LlmCapability.REASONING_TOKEN_USAGE,
+    LlmCapability.SUBPROCESS,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +83,107 @@ class CodexCliExecResult:
     usage_reasoning_tokens: float | int | None
     usage_total_tokens: float | int | None
     warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class CodexCliRunResult:
+    stdout: str
+    stderr: str
+    return_code: int
+    timing: ProviderCallTiming
+
+    def __post_init__(self) -> None:
+        _require_string_type(self.stdout, "stdout")
+        _require_string_type(self.stderr, "stderr")
+        if not isinstance(self.return_code, int) or isinstance(self.return_code, bool):
+            raise ValueError("return_code must be an integer")
+
+
+class CodexCliRunner(Protocol):
+    def run(self, command: CodexCliCommand, timeout_seconds: int) -> CodexCliRunResult: ...
+
+
+class SubprocessCodexCliRunner:
+    def run(self, command: CodexCliCommand, timeout_seconds: int) -> CodexCliRunResult:
+        try:
+            completed, timing = measure_provider_call(
+                lambda: subprocess.run(
+                    command.argv,
+                    input=command.stdin_text,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_seconds,
+                    check=False,
+                )
+            )
+        except FileNotFoundError as exc:
+            raise LlmProviderNotFoundError("codex_cli executable not found") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise LlmTimeoutError("codex_cli subprocess timed out") from exc
+        return CodexCliRunResult(
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+            return_code=completed.returncode,
+            timing=timing,
+        )
+
+
+class CodexCliClient(ProviderClientBase):
+    def __init__(
+        self,
+        *,
+        runner: CodexCliRunner | None = None,
+        exec_config: CodexCliExecConfig | None = None,
+        auth_config: CodexCliAuthConfig | None = None,
+        working_directory: Path | None = None,
+        output_schema_dir: Path | None = None,
+        default_model: str | None = None,
+    ) -> None:
+        super().__init__(
+            ProviderClientConfig(
+                provider=ProviderName.CODEX_CLI,
+                capabilities=CODEX_CLI_CAPABILITIES,
+                default_model=default_model,
+            )
+        )
+        self.runner = SubprocessCodexCliRunner() if runner is None else runner
+        self.exec_config = CodexCliExecConfig() if exec_config is None else exec_config
+        self.auth_config = CodexCliAuthConfig() if auth_config is None else auth_config
+        self.working_directory = working_directory
+        self.output_schema_dir = output_schema_dir
+
+    def complete_after_capability_check(self, request: LlmRequest) -> LlmResponse:
+        _validate_codex_auth_config(self.auth_config)
+        effective_request = _request_with_default_model(request, self.config.default_model)
+        schema_parent = None if self.output_schema_dir is None else str(self.output_schema_dir)
+        with tempfile.TemporaryDirectory(dir=schema_parent) as schema_dir:
+            output_schema_path = Path(schema_dir) / "output.schema.json"
+            _write_output_schema(effective_request, output_schema_path)
+            command = build_codex_exec_command(
+                effective_request,
+                output_schema_path=output_schema_path,
+                config=self.exec_config,
+                working_directory=self.working_directory,
+            )
+            run_result = self._run(command, timeout_seconds=effective_request.timeout_seconds)
+        if run_result.return_code != 0:
+            raise LlmRejectedRequestError(f"codex_cli subprocess exited with status {run_result.return_code}")
+        exec_result = parse_codex_exec_jsonl(run_result.stdout)
+        _validate_output_schema(effective_request, exec_result.output_value)
+        return build_codex_llm_response(
+            effective_request,
+            exec_result,
+            run_result.timing,
+            model=effective_request.model,
+        )
+
+    def _run(self, command: CodexCliCommand, *, timeout_seconds: int) -> CodexCliRunResult:
+        try:
+            return self.runner.run(command, timeout_seconds)
+        except FileNotFoundError as exc:
+            raise LlmProviderNotFoundError("codex_cli executable not found") from exc
+        except (TimeoutError, subprocess.TimeoutExpired) as exc:
+            raise LlmTimeoutError("codex_cli subprocess timed out") from exc
 
 
 def build_codex_exec_command(
@@ -182,6 +306,30 @@ def build_codex_llm_response(
     )
 
 
+def _validate_codex_auth_config(auth_config: CodexCliAuthConfig) -> None:
+    mode = cast(CodexCliAuthMode, auth_config.mode)
+    if mode == CodexCliAuthMode.API_KEY:
+        raise LlmConfigurationError("codex_cli API-key handoff is not implemented")
+
+
+def _request_with_default_model(request: LlmRequest, default_model: str | None) -> LlmRequest:
+    if request.model is not None or default_model is None:
+        return request
+    return replace(request, model=default_model)
+
+
+def _write_output_schema(request: LlmRequest, output_schema_path: Path) -> None:
+    output_schema_path.write_text(json.dumps(request.output.schema), encoding="utf-8")
+
+
+def _validate_output_schema(request: LlmRequest, output_value: JsonValue) -> None:
+    validator = Draft202012Validator(dict(request.output.schema), format_checker=FormatChecker())
+    try:
+        validator.validate(output_value)
+    except JsonSchemaLibraryError as exc:
+        raise LlmSchemaValidationError("codex_cli output did not match requested schema") from exc
+
+
 def _format_message(message: LlmMessage) -> str:
     role = cast(LlmMessageRole, message.role)
     return "\n".join(
@@ -281,6 +429,12 @@ def _require_config_string(value: object, field_name: str) -> str:
         raise ValueError(f"{field_name} must be a string")
     if not value.strip():
         raise ValueError(f"{field_name} must not be empty")
+    return value
+
+
+def _require_string_type(value: object, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a string")
     return value
 
 
