@@ -51,6 +51,17 @@ from curio.llm_caller.models import (
     TextContentPart,
     UnsupportedCapabilityError,
 )
+from curio.llm_caller.providers import (
+    ProviderCallTiming,
+    ProviderClientBase,
+    ProviderClientConfig,
+    ProviderErrorKind,
+    build_json_llm_response,
+    build_provider_usage,
+    map_provider_error,
+    measure_provider_call,
+    require_provider_capabilities,
+)
 
 __all__ = [
     "DEFAULT_CODEX_API_KEY_ACCOUNT",
@@ -87,6 +98,10 @@ __all__ = [
     "LlmUsage",
     "MeteredObject",
     "OpenAiApiAuthConfig",
+    "ProviderCallTiming",
+    "ProviderClientBase",
+    "ProviderClientConfig",
+    "ProviderErrorKind",
     "ProviderAuthConfig",
     "ProviderAuthConfigError",
     "ProviderName",
@@ -96,9 +111,14 @@ __all__ = [
     "SecretStore",
     "TextContentPart",
     "UnsupportedCapabilityError",
+    "build_json_llm_response",
+    "build_provider_usage",
     "default_codex_api_key_ref",
     "default_openai_api_key_ref",
     "default_provider_auth_config",
+    "map_provider_error",
+    "measure_provider_call",
+    "require_provider_capabilities",
     "resolve_codex_api_key",
     "resolve_openai_api_key",
     "secret_ref_cache_key",
