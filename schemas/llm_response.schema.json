@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/tzaffi/curio/schemas/llm_response.schema.json",
+  "title": "Curio LLM Response",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "llm_response_version",
+    "request_id",
+    "status",
+    "provider",
+    "model",
+    "output",
+    "usage",
+    "warnings"
+  ],
+  "properties": {
+    "llm_response_version": {
+      "const": "curio-llm-response.v1"
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "succeeded",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "provider": {
+      "type": "string",
+      "enum": [
+        "codex_cli",
+        "openai_api"
+      ]
+    },
+    "model": {
+      "$ref": "#/$defs/nullableNonEmptyString"
+    },
+    "output": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/outputValue"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "usage": {
+      "$ref": "#/$defs/llmUsage"
+    },
+    "warnings": {
+      "$ref": "#/$defs/warnings"
+    }
+  },
+  "$defs": {
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "nullableNonEmptyString": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "nullableNonNegativeNumber": {
+      "oneOf": [
+        {
+          "type": "number",
+          "minimum": 0
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "rfc3339UtcTimestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "meteredObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "quantity",
+        "unit"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "quantity": {
+          "type": "number",
+          "minimum": 0
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "llmUsage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input_tokens",
+        "cached_input_tokens",
+        "output_tokens",
+        "reasoning_tokens",
+        "total_tokens",
+        "metered_objects",
+        "started_at",
+        "completed_at",
+        "wall_seconds",
+        "thinking_seconds"
+      ],
+      "properties": {
+        "input_tokens": {
+          "$ref": "#/$defs/nullableNonNegativeNumber"
+        },
+        "cached_input_tokens": {
+          "$ref": "#/$defs/nullableNonNegativeNumber"
+        },
+        "output_tokens": {
+          "$ref": "#/$defs/nullableNonNegativeNumber"
+        },
+        "reasoning_tokens": {
+          "$ref": "#/$defs/nullableNonNegativeNumber"
+        },
+        "total_tokens": {
+          "$ref": "#/$defs/nullableNonNegativeNumber"
+        },
+        "metered_objects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/meteredObject"
+          }
+        },
+        "started_at": {
+          "$ref": "#/$defs/rfc3339UtcTimestamp"
+        },
+        "completed_at": {
+          "$ref": "#/$defs/rfc3339UtcTimestamp"
+        },
+        "wall_seconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "thinking_seconds": {
+          "$ref": "#/$defs/nullableNonNegativeNumber"
+        }
+      }
+    },
+    "outputValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "value"
+      ],
+      "properties": {
+        "type": {
+          "const": "json"
+        },
+        "value": {}
+      }
+    }
+  }
+}

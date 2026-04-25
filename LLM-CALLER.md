@@ -13,6 +13,11 @@ This document is normative for:
 - the v1 provider set: Codex CLI and OpenAI API
 - how unsupported provider capabilities fail
 
+The machine-readable counterparts to this document are:
+
+- [schemas/llm_request.schema.json](schemas/llm_request.schema.json)
+- [schemas/llm_response.schema.json](schemas/llm_response.schema.json)
+
 This document is not the place to define:
 
 - translation-specific JSON contracts
@@ -135,7 +140,6 @@ The stable JSON representation of an LLM request is:
   "llm_request_version": "curio-llm-request.v1",
   "request_id": "translate-20260424-000001",
   "workflow": "translate",
-  "provider": "codex_cli",
   "model": "gpt-5.3-codex",
   "instructions": "Return only JSON that satisfies the provided schema.",
   "input": [
@@ -178,8 +182,6 @@ Fields:
   Operator-visible identifier for logs and diagnostics.
 - `workflow`
   Curio workflow name, such as `translate` or `curate`.
-- `provider`
-  Provider identifier.
 - `model`
   Provider model name. If omitted at the Python layer, configuration may provide a default before the request is serialized.
 - `instructions`
@@ -252,7 +254,7 @@ Fields:
 - `model`
   Provider model actually used, if known.
 - `output`
-  The parsed provider result. Machine-read workflows should use `type = json`.
+  The parsed provider result. Machine-read workflows should use `type = json`. This may be `null` only when a non-success response is returned instead of a typed exception.
 - `usage`
   Token, metered-object, and timing data.
 - `warnings`

@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/tzaffi/curio/schemas/llm_request.schema.json",
+  "title": "Curio LLM Request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "llm_request_version",
+    "request_id",
+    "workflow",
+    "model",
+    "instructions",
+    "input",
+    "output",
+    "required_capabilities",
+    "timeout_seconds",
+    "metadata"
+  ],
+  "properties": {
+    "llm_request_version": {
+      "const": "curio-llm-request.v1"
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "workflow": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model": {
+      "$ref": "#/$defs/nullableNonEmptyString"
+    },
+    "instructions": {
+      "type": "string",
+      "minLength": 1
+    },
+    "input": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/message"
+      }
+    },
+    "output": {
+      "$ref": "#/$defs/outputRequest"
+    },
+    "required_capabilities": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/capability"
+      },
+      "uniqueItems": true
+    },
+    "timeout_seconds": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "nullableNonEmptyString": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "capability": {
+      "type": "string",
+      "enum": [
+        "text_generation",
+        "json_schema_output",
+        "token_usage",
+        "cached_input_usage",
+        "reasoning_token_usage",
+        "thinking_time",
+        "chatgpt_auth",
+        "api_key_auth",
+        "subprocess"
+      ]
+    },
+    "message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "content"
+      ],
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": [
+            "system",
+            "user",
+            "assistant"
+          ]
+        },
+        "content": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/textContentPart"
+          }
+        }
+      }
+    },
+    "textContentPart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "text"
+      ],
+      "properties": {
+        "type": {
+          "const": "text"
+        },
+        "text": {
+          "type": "string"
+        }
+      }
+    },
+    "outputRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "name",
+        "schema",
+        "strict"
+      ],
+      "properties": {
+        "type": {
+          "const": "json_schema"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schema": {
+          "type": "object"
+        },
+        "strict": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}
