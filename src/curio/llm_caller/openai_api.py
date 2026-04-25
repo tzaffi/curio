@@ -14,7 +14,6 @@ from openai import (
 )
 
 from curio.llm_caller.auth import (
-    KeyringSecretStore,
     OpenAiApiAuthConfig,
     SecretStore,
     resolve_openai_api_key,
@@ -113,9 +112,9 @@ class OpenAiApiClient(ProviderClientBase):
     def __init__(
         self,
         *,
-        transport: OpenAiApiTransport | None = None,
-        auth_config: OpenAiApiAuthConfig | None = None,
-        secret_store: SecretStore | None = None,
+        transport: OpenAiApiTransport,
+        auth_config: OpenAiApiAuthConfig,
+        secret_store: SecretStore,
         default_model: str | None = None,
     ) -> None:
         super().__init__(
@@ -125,9 +124,9 @@ class OpenAiApiClient(ProviderClientBase):
                 default_model=default_model,
             )
         )
-        self.transport = SdkOpenAiApiTransport() if transport is None else transport
-        self.auth_config = OpenAiApiAuthConfig() if auth_config is None else auth_config
-        self.secret_store = KeyringSecretStore() if secret_store is None else secret_store
+        self.transport = transport
+        self.auth_config = auth_config
+        self.secret_store = secret_store
 
     def complete_after_capability_check(self, request: LlmRequest) -> LlmResponse:
         effective_request = _request_with_default_model(request, self.config.default_model)

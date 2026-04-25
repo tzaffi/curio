@@ -1,0 +1,17 @@
+{
+  "providers": {
+    "openai_api": {
+      "auth": {
+        "provider": "openai_api",
+        "api_key_ref": {
+          "backend": "keyring",
+          "service": "curio/openai-api",
+          "account": "default-api-key",
+          "label": "OpenAI API key"
+        },
+        "organization": null,
+        "project": null
+      }
+    }
+  }
+}

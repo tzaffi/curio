@@ -230,10 +230,20 @@ def test_openai_api_client_calls_fake_transport_and_resolves_secret_at_call_time
     assert response.output.value == {"ok": True}
 
 
-def test_openai_api_client_uses_default_model_and_default_dependencies() -> None:
-    client = OpenAiApiClient(default_model="gpt-default")
+def test_openai_api_client_uses_explicit_dependencies_and_default_model() -> None:
+    transport = FakeOpenAiTransport()
+    auth_config = make_auth_config()
+    secret_store = make_secret_store()
+    client = OpenAiApiClient(
+        transport=transport,
+        auth_config=auth_config,
+        secret_store=secret_store,
+        default_model="gpt-default",
+    )
 
-    assert isinstance(client.transport, SdkOpenAiApiTransport)
+    assert client.transport is transport
+    assert client.auth_config is auth_config
+    assert client.secret_store is secret_store
     assert client.capabilities == OPENAI_API_CAPABILITIES
     assert client.provider == ProviderName.OPENAI_API
     assert client.config.default_model == "gpt-default"

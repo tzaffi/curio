@@ -7,7 +7,16 @@ from typer.testing import CliRunner
 
 import curio.cli as cli
 from curio.cli import app
-from curio.llm_caller import LlmUsage, MeteredObject, ProviderName
+from curio.llm_caller import (
+    LlmOutput,
+    LlmProviderNotFoundError,
+    LlmRequest,
+    LlmResponse,
+    LlmStatus,
+    LlmUsage,
+    MeteredObject,
+    ProviderName,
+)
 from curio.translate import (
     Block,
     LlmSummary,
@@ -51,7 +60,7 @@ class FakeTranslationService:
             request_id=request.request_id,
             blocks=tuple(self._block_response(block) for block in request.blocks),
             llm=LlmSummary(
-                provider=request.provider or ProviderName.CODEX_CLI,
+                provider=self._provider(request),
                 model=request.model,
                 usage=make_usage(),
             ),
@@ -76,6 +85,11 @@ class FakeTranslationService:
             warnings=self.block_warnings,
         )
 
+    def _provider(self, request: TranslationRequest) -> ProviderName:
+        if request.provider is None:
+            raise AssertionError("test request must configure provider explicitly")
+        return request.provider
+
 
 def _fake_translation(text: str) -> str:
     if text.strip().casefold() == "bonjour":
@@ -86,7 +100,39 @@ def _fake_translation(text: str) -> str:
 
 
 def install_fake_service(monkeypatch: pytest.MonkeyPatch, service: FakeTranslationService) -> None:
-    monkeypatch.setattr(cli, "_build_translation_service", lambda: service)
+    monkeypatch.setattr(cli, "_build_translation_service", lambda _provider, _config_path: service)
+
+
+class FakeLlmClient:
+    def __init__(self, provider: ProviderName) -> None:
+        self.provider = provider
+        self.requests: list[LlmRequest] = []
+
+    def complete(self, request: LlmRequest) -> LlmResponse:
+        self.requests.append(request)
+        return LlmResponse(
+            request_id=request.request_id,
+            status=LlmStatus.SUCCEEDED,
+            provider=self.provider,
+            model=request.model,
+            output=LlmOutput(
+                value={
+                    "request_id": request.request_id,
+                    "blocks": [
+                        {
+                            "block_id": cli.RAW_CLI_BLOCK_ID,
+                            "name": cli.RAW_CLI_BLOCK_NAME,
+                            "detected_language": "fr",
+                            "english_confidence_estimate": 0.01,
+                            "translation_required": True,
+                            "translated_text": "Hello",
+                            "warnings": [],
+                        }
+                    ],
+                }
+            ),
+            usage=make_usage(),
+        )
 
 
 def test_root_without_subcommand_shows_help() -> None:
@@ -120,11 +166,77 @@ def test_reserved_commands_report_stub_status() -> None:
         assert f"{command} is reserved but not implemented yet." in result.output
 
 
-def test_translate_without_provider_client_reports_runtime_error() -> None:
-    result = runner.invoke(app, ["translate", "bonjour"])
+def test_cli_build_provider_client_delegates_to_llm_factory(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = FakeLlmClient(ProviderName.CODEX_CLI)
+    calls: list[tuple[ProviderName | str, object]] = []
+
+    def fake_build_provider_client(provider: ProviderName | str, config: object, **kwargs: object) -> FakeLlmClient:
+        del kwargs
+        calls.append((provider, config))
+        return client
+
+    monkeypatch.setattr(cli, "load_config", lambda path: f"loaded:{path}")
+    monkeypatch.setattr(cli, "build_provider_client", fake_build_provider_client)
+
+    assert cli._build_provider_client(ProviderName.OPENAI_API, Path("curio-config.json")) is client
+    assert calls == [(ProviderName.OPENAI_API, "loaded:curio-config.json")]
+
+
+def test_translate_provider_factory_errors_are_runtime_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail_provider_client_build(provider: ProviderName | str, config_path: Path | None) -> FakeLlmClient:
+        del config_path
+        raise LlmProviderNotFoundError(f"provider client failed: {provider}")
+
+    monkeypatch.setattr(cli, "_build_provider_client", fail_provider_client_build)
+
+    result = runner.invoke(app, ["translate", "--provider", "codex_cli", "bonjour"])
 
     assert result.exit_code == 1
-    assert "provider client is not implemented yet: codex_cli" in result.output
+    assert "provider client failed: codex_cli" in result.output
+
+
+def test_translate_rejects_missing_provider_for_raw_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = FakeTranslationService()
+    install_fake_service(monkeypatch, service)
+
+    result = runner.invoke(app, ["translate", "bonjour"])
+
+    assert result.exit_code == 2
+    assert cli.PROVIDER_REQUIRED_MESSAGE in result.output
+    assert service.requests == []
+
+
+def test_request_provider_rejects_unconfigured_request(capsys: pytest.CaptureFixture[str]) -> None:
+    request = TranslationRequest(
+        request_id="translate-without-provider",
+        blocks=[Block(block_id=1, name="message", source_language_hint=None, text="bonjour")],
+    )
+
+    with pytest.raises(cli.typer.Exit) as exc:
+        cli._request_provider(request)
+
+    assert exc.value.exit_code == 2
+    assert cli.PROVIDER_REQUIRED_MESSAGE in capsys.readouterr().err
+
+
+def test_translate_default_service_uses_provider_factory(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = FakeLlmClient(ProviderName.OPENAI_API)
+    providers: list[ProviderName | str] = []
+
+    def fake_build_provider_client(provider: ProviderName | str, config_path: Path | None) -> FakeLlmClient:
+        del config_path
+        providers.append(provider)
+        return client
+
+    monkeypatch.setattr(cli, "_build_provider_client", fake_build_provider_client)
+
+    result = runner.invoke(app, ["translate", "--provider", "openai_api", "--model", "gpt-test", "bonjour"])
+
+    assert result.exit_code == 0
+    assert result.output == "Hello\n"
+    assert providers == [ProviderName.OPENAI_API]
+    assert client.requests[0].model == "gpt-test"
+    assert client.requests[0].metadata["provider"] == "openai_api"
 
 
 def test_translate_raw_text_uses_injected_service_and_prints_translated_text(
@@ -166,7 +278,10 @@ def test_translate_raw_english_text_prints_original_text(monkeypatch: pytest.Mon
     service = FakeTranslationService()
     install_fake_service(monkeypatch, service)
 
-    result = runner.invoke(app, ["translate", "--source-language", "en-US", "Already English."])
+    result = runner.invoke(
+        app,
+        ["translate", "--provider", "codex_cli", "--source-language", "en-US", "Already English."],
+    )
 
     assert result.exit_code == 0
     assert result.output == "Already English.\n"
@@ -176,7 +291,7 @@ def test_translate_raw_text_json_output_includes_warnings(monkeypatch: pytest.Mo
     service = FakeTranslationService(warnings=["provider warning"], block_warnings=["block warning"])
     install_fake_service(monkeypatch, service)
 
-    result = runner.invoke(app, ["translate", "--json", "bonjour"])
+    result = runner.invoke(app, ["translate", "--provider", "codex_cli", "--json", "bonjour"])
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
@@ -190,7 +305,7 @@ def test_translate_raw_text_non_json_emits_warnings_to_stderr(monkeypatch: pytes
     service = FakeTranslationService(warnings=["provider warning"], block_warnings=["block warning"])
     install_fake_service(monkeypatch, service)
 
-    result = runner.invoke(app, ["translate", "bonjour"])
+    result = runner.invoke(app, ["translate", "--provider", "codex_cli", "bonjour"])
 
     assert result.exit_code == 0
     assert "provider warning" in result.output
@@ -202,7 +317,7 @@ def test_translate_reads_raw_text_from_stdin(monkeypatch: pytest.MonkeyPatch) ->
     service = FakeTranslationService()
     install_fake_service(monkeypatch, service)
 
-    result = runner.invoke(app, ["translate"], input="bonjour\n")
+    result = runner.invoke(app, ["translate", "--provider", "codex_cli"], input="bonjour\n")
 
     assert result.exit_code == 0
     assert result.output == "Hello\n"
@@ -232,7 +347,10 @@ def test_translate_reads_input_file_and_writes_output_file(
     output_path = tmp_path / "translated.txt"
     input_path.write_text("bonjour", encoding="utf-8")
 
-    result = runner.invoke(app, ["translate", "--input-file", str(input_path), "--output", str(output_path)])
+    result = runner.invoke(
+        app,
+        ["translate", "--provider", "codex_cli", "--input-file", str(input_path), "--output", str(output_path)],
+    )
 
     assert result.exit_code == 0
     assert result.output == ""
@@ -320,7 +438,7 @@ def test_translate_rejects_ambiguous_and_missing_input_modes(
     input_path = tmp_path / "note.txt"
     input_path.write_text("bonjour", encoding="utf-8")
 
-    ambiguous = runner.invoke(app, ["translate", "--input-file", str(input_path), "bonjour"])
+    ambiguous = runner.invoke(app, ["translate", "--provider", "codex_cli", "--input-file", str(input_path), "bonjour"])
     missing = runner.invoke(app, ["translate"])
 
     assert ambiguous.exit_code == 2
@@ -347,6 +465,26 @@ def test_translate_rejects_source_language_with_input_json(
 
     assert result.exit_code == 2
     assert "--source-language can only be used with raw text input" in result.output
+    assert service.requests == []
+
+
+def test_translate_rejects_structured_input_without_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    service = FakeTranslationService()
+    install_fake_service(monkeypatch, service)
+    input_path = tmp_path / "request.json"
+    request = TranslationRequest(
+        request_id="translate-from-json",
+        blocks=[Block(block_id=1, name="message", source_language_hint="fr", text="bonjour")],
+    )
+    input_path.write_text(json.dumps(request.to_json()), encoding="utf-8")
+
+    result = runner.invoke(app, ["translate", "--input-json", str(input_path)])
+
+    assert result.exit_code == 2
+    assert cli.PROVIDER_REQUIRED_MESSAGE in result.output
     assert service.requests == []
 
 
@@ -377,7 +515,7 @@ def test_translate_rejects_invalid_request_options(monkeypatch: pytest.MonkeyPat
     service = FakeTranslationService()
     install_fake_service(monkeypatch, service)
 
-    target_language = runner.invoke(app, ["translate", "--target-language", "fr", "bonjour"])
+    target_language = runner.invoke(app, ["translate", "--provider", "codex_cli", "--target-language", "fr", "bonjour"])
     provider = runner.invoke(app, ["translate", "--provider", "bogus", "bonjour"])
 
     assert target_language.exit_code == 2
@@ -391,7 +529,7 @@ def test_translate_reports_output_write_failures(monkeypatch: pytest.MonkeyPatch
     service = FakeTranslationService()
     install_fake_service(monkeypatch, service)
 
-    result = runner.invoke(app, ["translate", "--output", str(tmp_path), "bonjour"])
+    result = runner.invoke(app, ["translate", "--provider", "codex_cli", "--output", str(tmp_path), "bonjour"])
 
     assert result.exit_code == 1
     assert "could not write --output" in result.output

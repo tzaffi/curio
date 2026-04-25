@@ -239,13 +239,6 @@ class CodexCliAuthConfig:
 ProviderAuthConfig = OpenAiApiAuthConfig | CodexCliAuthConfig
 
 
-def default_provider_auth_config(provider: ProviderName | str) -> ProviderAuthConfig:
-    provider_name = ProviderName(provider)
-    if provider_name == ProviderName.OPENAI_API:
-        return OpenAiApiAuthConfig()
-    return CodexCliAuthConfig()
-
-
 def resolve_openai_api_key(config: OpenAiApiAuthConfig, secret_store: SecretStore) -> str:
     return secret_store.get_secret(config.api_key_ref)
 

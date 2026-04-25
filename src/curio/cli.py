@@ -6,11 +6,15 @@ from typing import Annotated, NoReturn, cast
 import click
 import typer
 
+from curio.config import ConfigError, load_config
 from curio.llm_caller import (
+    KeyringSecretStore,
     LlmCallerError,
-    LlmProviderNotFoundError,
-    LlmRequest,
-    LlmResponse,
+    LlmClient,
+    ProviderName,
+    SdkOpenAiApiTransport,
+    SubprocessCodexCliRunner,
+    build_provider_client,
 )
 from curio.schemas import SchemaValidationError
 from curio.translate import (
@@ -30,8 +34,8 @@ app = typer.Typer(
 
 RAW_CLI_BLOCK_ID = 1
 RAW_CLI_BLOCK_NAME = "cli_text"
-DEFAULT_PROVIDER = "codex_cli"
 DEFAULT_TIMEOUT_SECONDS = 300
+PROVIDER_REQUIRED_MESSAGE = "provider must be explicitly configured with --provider or input JSON"
 
 
 @app.callback()
@@ -46,14 +50,19 @@ def _reserved(command: str) -> None:
     raise typer.Exit(1)
 
 
-class _ProviderClientNotImplemented:
-    def complete(self, request: LlmRequest) -> LlmResponse:
-        provider = request.metadata.get("provider") or DEFAULT_PROVIDER
-        raise LlmProviderNotFoundError(f"provider client is not implemented yet: {provider}")
+def _build_provider_client(provider: ProviderName | str, config_path: Path | None) -> LlmClient:
+    return build_provider_client(
+        provider,
+        load_config(config_path),
+        secret_store=KeyringSecretStore(),
+        codex_runner=SubprocessCodexCliRunner(),
+        openai_transport=SdkOpenAiApiTransport(),
+        codex_working_directory=Path.cwd(),
+    )
 
 
-def _build_translation_service() -> TranslationService:
-    return TranslationService(llm_client=_ProviderClientNotImplemented())
+def _build_translation_service(provider: ProviderName | str, config_path: Path | None) -> TranslationService:
+    return TranslationService(llm_client=_build_provider_client(provider, config_path))
 
 
 def _fail_usage(message: str) -> NoReturn:
@@ -132,10 +141,13 @@ def _apply_structured_request_overrides(
     *,
     target_language: str,
     english_confidence_threshold: float,
-    provider: str,
+    provider: str | None,
     model: str | None,
     timeout_seconds: int,
 ) -> TranslationRequest:
+    selected_provider = provider if _parameter_was_set(ctx, "provider") else request.provider
+    if selected_provider is None:
+        raise ValueError(PROVIDER_REQUIRED_MESSAGE)
     return TranslationRequest(
         request_id=request.request_id,
         target_language=target_language if _parameter_was_set(ctx, "target_language") else request.target_language,
@@ -143,7 +155,7 @@ def _apply_structured_request_overrides(
         if _parameter_was_set(ctx, "english_confidence_threshold")
         else request.english_confidence_threshold,
         blocks=request.blocks,
-        provider=provider if _parameter_was_set(ctx, "provider") or request.provider is None else request.provider,
+        provider=selected_provider,
         model=model if _parameter_was_set(ctx, "model") or request.model is None else request.model,
         timeout_seconds=timeout_seconds
         if _parameter_was_set(ctx, "timeout_seconds") or request.timeout_seconds is None
@@ -160,7 +172,7 @@ def _translation_request_from_cli(
     source_language: str | None,
     target_language: str,
     english_confidence_threshold: float,
-    provider: str,
+    provider: str | None,
     model: str | None,
     timeout_seconds: int,
 ) -> TranslationRequest:
@@ -196,6 +208,8 @@ def _translation_request_from_cli(
             raw_text = _read_text_file(input_file, "--input-file")
         else:
             raw_text = cast(str, stdin_text)
+        if provider is None:
+            _fail_usage(PROVIDER_REQUIRED_MESSAGE)
 
         return _raw_translation_request(
             raw_text,
@@ -242,6 +256,12 @@ def _write_output(rendered_output: str, output: Path | None) -> None:
         _fail_runtime(f"could not write --output: {exc}")
 
 
+def _request_provider(request: TranslationRequest) -> ProviderName:
+    if request.provider is None:
+        _fail_usage(PROVIDER_REQUIRED_MESSAGE)
+    return cast(ProviderName, request.provider)
+
+
 @app.command("translate")
 def translate(
     ctx: typer.Context,
@@ -253,6 +273,10 @@ def translate(
     ] = None,
     json_output: Annotated[bool, typer.Option("--json", help="Print the full translation response JSON.")] = False,
     output: Annotated[Path | None, typer.Option("--output", help="Write output to a UTF-8 file.")] = None,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Read Curio runtime config JSON. Defaults to ./config.json."),
+    ] = None,
     source_language: Annotated[
         str | None,
         typer.Option("--source-language", help="Optional source-language hint for raw text."),
@@ -266,9 +290,9 @@ def translate(
         typer.Option("--english-confidence-threshold", help="Confidence threshold for treating text as English."),
     ] = DEFAULT_ENGLISH_CONFIDENCE_THRESHOLD,
     provider: Annotated[
-        str,
-        typer.Option("--provider", help="LLM provider override, such as codex_cli or openai_api."),
-    ] = DEFAULT_PROVIDER,
+        str | None,
+        typer.Option("--provider", help="LLM provider. Required unless --input-json contains provider."),
+    ] = None,
     model: Annotated[str | None, typer.Option("--model", help="Provider model override.")] = None,
     timeout_seconds: Annotated[
         int,
@@ -289,8 +313,8 @@ def translate(
         timeout_seconds=timeout_seconds,
     )
     try:
-        response = _build_translation_service().translate(request)
-    except (LlmCallerError, TranslationError) as exc:
+        response = _build_translation_service(_request_provider(request), config_path).translate(request)
+    except (ConfigError, LlmCallerError, TranslationError) as exc:
         _fail_runtime(str(exc))
 
     structured_output = json_output or input_json is not None

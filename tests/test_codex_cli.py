@@ -12,6 +12,7 @@ from curio.llm_caller import (
     CodexCliClient,
     CodexCliCommand,
     CodexCliExecConfig,
+    CodexCliRunner,
     CodexCliRunResult,
     JsonSchemaOutput,
     LlmConfigurationError,
@@ -98,6 +99,24 @@ class FakeCodexCliRunner:
         )
 
 
+def make_client(
+    runner: CodexCliRunner,
+    tmp_path: Path,
+    *,
+    auth_config: CodexCliAuthConfig | None = None,
+    exec_config: CodexCliExecConfig | None = None,
+    default_model: str | None = None,
+) -> CodexCliClient:
+    return CodexCliClient(
+        runner=runner,
+        exec_config=CodexCliExecConfig() if exec_config is None else exec_config,
+        auth_config=CodexCliAuthConfig() if auth_config is None else auth_config,
+        working_directory=tmp_path,
+        output_schema_dir=tmp_path,
+        default_model=default_model,
+    )
+
+
 def test_build_codex_exec_command_uses_stdin_prompt_and_safe_defaults() -> None:
     request = make_request()
     command = build_codex_exec_command(
@@ -145,6 +164,7 @@ def test_build_codex_exec_command_accepts_minimal_config_without_model() -> None
         make_request(model=None),
         output_schema_path=Path("schema.json"),
         config=CodexCliExecConfig(json_events=False, ephemeral=False),
+        working_directory=Path("/Users/zeph/github/tzaffi/curio"),
     )
 
     assert command.argv == (
@@ -156,8 +176,18 @@ def test_build_codex_exec_command_accepts_minimal_config_without_model() -> None
         "never",
         "--output-schema",
         "schema.json",
+        "--cd",
+        "/Users/zeph/github/tzaffi/curio",
         "-",
     )
+
+    with pytest.raises(ValueError, match="working_directory must be a path"):
+        build_codex_exec_command(
+            make_request(model=None),
+            output_schema_path=Path("schema.json"),
+            config=CodexCliExecConfig(),
+            working_directory=cast(Path, None),
+        )
 
 
 def test_codex_exec_config_rejects_empty_values() -> None:
@@ -358,11 +388,7 @@ def test_codex_cli_client_calls_fake_runner_and_validates_schema(tmp_path: Path)
             {"type": "turn.completed", "usage": {"input_tokens": 6, "output_tokens": 2, "total_tokens": 8}},
         )
     )
-    client = CodexCliClient(
-        runner=runner,
-        output_schema_dir=tmp_path,
-        default_model="codex-default",
-    )
+    client = make_client(runner, tmp_path, default_model="codex-default")
 
     response = client.complete(make_request(model=None, output_schema=output_schema))
 
@@ -384,11 +410,7 @@ def test_codex_cli_client_calls_fake_runner_and_validates_schema(tmp_path: Path)
 
 def test_codex_cli_client_uses_chatgpt_cached_auth_without_curio_secret(tmp_path: Path) -> None:
     runner = FakeCodexCliRunner(stdout=jsonl({"type": "agent_message", "text": "{}"}))
-    client = CodexCliClient(
-        runner=runner,
-        auth_config=CodexCliAuthConfig(mode=CodexCliAuthMode.CHATGPT),
-        output_schema_dir=tmp_path,
-    )
+    client = make_client(runner, tmp_path, auth_config=CodexCliAuthConfig(mode=CodexCliAuthMode.CHATGPT))
 
     response = client.complete(make_request())
 
@@ -399,7 +421,7 @@ def test_codex_cli_client_uses_chatgpt_cached_auth_without_curio_secret(tmp_path
 
 def test_codex_cli_client_rejects_unsupported_capabilities_before_runner(tmp_path: Path) -> None:
     runner = FakeCodexCliRunner(stdout=jsonl({"type": "agent_message", "text": "{}"}))
-    client = CodexCliClient(runner=runner, output_schema_dir=tmp_path)
+    client = make_client(runner, tmp_path)
     request = LlmRequest(
         request_id="translate-test",
         workflow="translate",
@@ -417,13 +439,19 @@ def test_codex_cli_client_rejects_unsupported_capabilities_before_runner(tmp_pat
     assert CODEX_CLI_CAPABILITIES == client.capabilities
 
 
+def test_codex_cli_client_requires_model_before_runner(tmp_path: Path) -> None:
+    runner = FakeCodexCliRunner(stdout=jsonl({"type": "agent_message", "text": "{}"}))
+    client = make_client(runner, tmp_path)
+
+    with pytest.raises(LlmConfigurationError, match="model is required"):
+        client.complete(make_request(model=None))
+
+    assert runner.calls == []
+
+
 def test_codex_cli_client_keeps_api_key_handoff_isolated_before_runner(tmp_path: Path) -> None:
     runner = FakeCodexCliRunner(stdout=jsonl({"type": "agent_message", "text": "{}"}))
-    client = CodexCliClient(
-        runner=runner,
-        auth_config=CodexCliAuthConfig(mode=CodexCliAuthMode.API_KEY),
-        output_schema_dir=tmp_path,
-    )
+    client = make_client(runner, tmp_path, auth_config=CodexCliAuthConfig(mode=CodexCliAuthMode.API_KEY))
 
     with pytest.raises(LlmConfigurationError, match="API-key handoff is not implemented"):
         client.complete(make_request())
@@ -433,19 +461,19 @@ def test_codex_cli_client_keeps_api_key_handoff_isolated_before_runner(tmp_path:
 
 def test_codex_cli_client_maps_runner_failures_and_exit_status(tmp_path: Path) -> None:
     missing_runner = FakeCodexCliRunner(exception=FileNotFoundError("missing codex"))
-    missing_client = CodexCliClient(runner=missing_runner, output_schema_dir=tmp_path)
+    missing_client = make_client(missing_runner, tmp_path)
     with pytest.raises(LlmProviderNotFoundError, match="codex_cli executable not found"):
         missing_client.complete(make_request())
     assert len(missing_runner.calls) == 1
 
     timeout_runner = FakeCodexCliRunner(exception=TimeoutError("slow codex"))
-    timeout_client = CodexCliClient(runner=timeout_runner, output_schema_dir=tmp_path)
+    timeout_client = make_client(timeout_runner, tmp_path)
     with pytest.raises(LlmTimeoutError, match="codex_cli subprocess timed out"):
         timeout_client.complete(make_request())
     assert len(timeout_runner.calls) == 1
 
     failed_runner = FakeCodexCliRunner(stderr="secret-ish stderr", return_code=7)
-    failed_client = CodexCliClient(runner=failed_runner, output_schema_dir=tmp_path)
+    failed_client = make_client(failed_runner, tmp_path)
     with pytest.raises(LlmRejectedRequestError) as failed:
         failed_client.complete(make_request())
     assert str(failed.value) == "codex_cli subprocess exited with status 7"
@@ -454,12 +482,12 @@ def test_codex_cli_client_maps_runner_failures_and_exit_status(tmp_path: Path) -
 
 def test_codex_cli_client_reports_invalid_or_schema_invalid_output(tmp_path: Path) -> None:
     invalid_runner = FakeCodexCliRunner(stdout=jsonl({"type": "agent_message", "text": "not json"}))
-    invalid_client = CodexCliClient(runner=invalid_runner, output_schema_dir=tmp_path)
+    invalid_client = make_client(invalid_runner, tmp_path)
     with pytest.raises(LlmInvalidOutputError, match="final agent message is not valid JSON"):
         invalid_client.complete(make_request())
 
     schema_runner = FakeCodexCliRunner(stdout=jsonl({"type": "agent_message", "text": json.dumps({"ok": "yes"})}))
-    schema_client = CodexCliClient(runner=schema_runner, output_schema_dir=tmp_path)
+    schema_client = make_client(schema_runner, tmp_path)
     with pytest.raises(LlmSchemaValidationError, match="output did not match requested schema"):
         schema_client.complete(
             make_request(
@@ -538,5 +566,24 @@ def test_subprocess_codex_cli_runner_maps_subprocess_exceptions(monkeypatch: pyt
         SubprocessCodexCliRunner().run(command, timeout_seconds=5)
 
 
-def test_codex_cli_client_defaults_to_subprocess_runner() -> None:
-    assert isinstance(CodexCliClient().runner, SubprocessCodexCliRunner)
+def test_codex_cli_client_uses_explicit_runner_and_config(tmp_path: Path) -> None:
+    runner = FakeCodexCliRunner()
+    exec_config = CodexCliExecConfig(executable="codex-test")
+    auth_config = CodexCliAuthConfig()
+
+    client = make_client(runner, tmp_path, exec_config=exec_config, auth_config=auth_config)
+
+    assert client.runner is runner
+    assert client.exec_config is exec_config
+    assert client.auth_config is auth_config
+
+
+def test_codex_cli_client_requires_explicit_working_directory(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="working_directory must be a path"):
+        CodexCliClient(
+            runner=FakeCodexCliRunner(),
+            exec_config=CodexCliExecConfig(),
+            auth_config=CodexCliAuthConfig(),
+            working_directory=cast(Path, None),
+            output_schema_dir=tmp_path,
+        )

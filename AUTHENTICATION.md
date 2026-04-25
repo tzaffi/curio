@@ -52,14 +52,14 @@ Use this when Curio will call the OpenAI API directly.
 
 7. Press Return.
 
-Curio will use this locator:
+`config.example.openai_api.json` uses this locator:
 
 ```text
 service = curio/openai-api
 account = default-api-key
 ```
 
-Curio stores that locator in config/code. Curio does not store the API key in
+Curio stores that locator in `config.json`. Curio does not store the API key in
 repo files, JSON payloads, logs, CLI args, shell profiles, or environment
 variables.
 
@@ -131,6 +131,9 @@ Curio's default API-key locator for Codex is:
 service = curio/codex-cli
 account = default-api-key
 ```
+
+If Codex API-key mode is later enabled for Curio-owned handoff, put only this
+locator metadata in `config.json`, never the raw key.
 
 Store the key:
 

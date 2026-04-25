@@ -1,0 +1,22 @@
+{
+  "providers": {
+    "codex_cli": {
+      "auth": {
+        "provider": "codex_cli",
+        "mode": "chatgpt",
+        "api_key_ref": null,
+        "require_keyring_credentials_store": true
+      },
+      "exec": {
+        "executable": "codex",
+        "sandbox": "read-only",
+        "color": "never",
+        "ephemeral": true,
+        "json_events": true,
+        "skip_git_repo_check": false,
+        "ignore_user_config": false,
+        "extra_config": []
+      }
+    }
+  }
+}

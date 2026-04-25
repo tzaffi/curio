@@ -132,10 +132,10 @@ class CodexCliClient(ProviderClientBase):
     def __init__(
         self,
         *,
-        runner: CodexCliRunner | None = None,
-        exec_config: CodexCliExecConfig | None = None,
-        auth_config: CodexCliAuthConfig | None = None,
-        working_directory: Path | None = None,
+        runner: CodexCliRunner,
+        exec_config: CodexCliExecConfig,
+        auth_config: CodexCliAuthConfig,
+        working_directory: Path,
         output_schema_dir: Path | None = None,
         default_model: str | None = None,
     ) -> None:
@@ -146,15 +146,19 @@ class CodexCliClient(ProviderClientBase):
                 default_model=default_model,
             )
         )
-        self.runner = SubprocessCodexCliRunner() if runner is None else runner
-        self.exec_config = CodexCliExecConfig() if exec_config is None else exec_config
-        self.auth_config = CodexCliAuthConfig() if auth_config is None else auth_config
+        self.runner = runner
+        self.exec_config = exec_config
+        self.auth_config = auth_config
+        if not isinstance(working_directory, Path):
+            raise ValueError("working_directory must be a path")
         self.working_directory = working_directory
         self.output_schema_dir = output_schema_dir
 
     def complete_after_capability_check(self, request: LlmRequest) -> LlmResponse:
         _validate_codex_auth_config(self.auth_config)
         effective_request = _request_with_default_model(request, self.config.default_model)
+        if effective_request.model is None:
+            raise LlmConfigurationError("codex_cli model is required")
         schema_parent = None if self.output_schema_dir is None else str(self.output_schema_dir)
         with tempfile.TemporaryDirectory(dir=schema_parent) as schema_dir:
             output_schema_path = Path(schema_dir) / "output.schema.json"
@@ -190,25 +194,25 @@ def build_codex_exec_command(
     request: LlmRequest,
     *,
     output_schema_path: Path,
-    config: CodexCliExecConfig | None = None,
-    working_directory: Path | None = None,
+    config: CodexCliExecConfig,
+    working_directory: Path,
 ) -> CodexCliCommand:
-    exec_config = CodexCliExecConfig() if config is None else config
-    argv = [exec_config.executable, "exec"]
-    if exec_config.json_events:
+    if not isinstance(working_directory, Path):
+        raise ValueError("working_directory must be a path")
+    argv = [config.executable, "exec"]
+    if config.json_events:
         argv.append("--json")
-    if exec_config.ephemeral:
+    if config.ephemeral:
         argv.append("--ephemeral")
-    if exec_config.skip_git_repo_check:
+    if config.skip_git_repo_check:
         argv.append("--skip-git-repo-check")
-    if exec_config.ignore_user_config:
+    if config.ignore_user_config:
         argv.append("--ignore-user-config")
-    argv.extend(["--sandbox", exec_config.sandbox])
-    argv.extend(["--color", exec_config.color])
+    argv.extend(["--sandbox", config.sandbox])
+    argv.extend(["--color", config.color])
     argv.extend(["--output-schema", str(output_schema_path)])
-    if working_directory is not None:
-        argv.extend(["--cd", str(working_directory)])
-    for override in exec_config.extra_config:
+    argv.extend(["--cd", str(working_directory)])
+    for override in config.extra_config:
         argv.extend(["--config", override])
     if request.model is not None:
         argv.extend(["--model", request.model])

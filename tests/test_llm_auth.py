@@ -11,11 +11,9 @@ from curio.llm_caller import (
     KeyringSecretStore,
     OpenAiApiAuthConfig,
     ProviderAuthConfigError,
-    ProviderName,
     SecretBackend,
     SecretLookupError,
     SecretRef,
-    default_provider_auth_config,
     resolve_codex_api_key,
     resolve_openai_api_key,
     secret_ref_cache_key,
@@ -197,14 +195,6 @@ def test_codex_auth_config_rejects_invalid_combinations() -> None:
 
     with pytest.raises(ProviderAuthConfigError, match="does not use a Curio API key"):
         resolve_codex_api_key(CodexCliAuthConfig(), InMemorySecretStore())
-
-
-def test_default_provider_auth_config_selects_provider_configs() -> None:
-    assert isinstance(default_provider_auth_config(ProviderName.OPENAI_API), OpenAiApiAuthConfig)
-    assert isinstance(default_provider_auth_config("codex_cli"), CodexCliAuthConfig)
-
-    with pytest.raises(ValueError, match="bogus"):
-        default_provider_auth_config("bogus")
 
 
 def test_keyring_backend_exception_text_is_not_exposed(monkeypatch: pytest.MonkeyPatch) -> None:

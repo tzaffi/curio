@@ -18,7 +18,6 @@ from curio.llm_caller.auth import (
     SecretStore,
     default_codex_api_key_ref,
     default_openai_api_key_ref,
-    default_provider_auth_config,
     resolve_codex_api_key,
     resolve_openai_api_key,
     secret_ref_cache_key,
@@ -41,6 +40,7 @@ from curio.llm_caller.codex_cli import (
     build_codex_llm_response,
     parse_codex_exec_jsonl,
 )
+from curio.llm_caller.factory import ProviderClientFactory, build_provider_client
 from curio.llm_caller.models import (
     LLM_REQUEST_VERSION,
     LLM_RESPONSE_VERSION,
@@ -142,6 +142,7 @@ __all__ = [
     "OpenAiApiClient",
     "OpenAiApiTransport",
     "ProviderCallTiming",
+    "ProviderClientFactory",
     "ProviderClientBase",
     "ProviderClientConfig",
     "ProviderErrorKind",
@@ -162,10 +163,10 @@ __all__ = [
     "build_json_llm_response",
     "build_openai_llm_response",
     "build_openai_response_request",
+    "build_provider_client",
     "build_provider_usage",
     "default_codex_api_key_ref",
     "default_openai_api_key_ref",
-    "default_provider_auth_config",
     "map_provider_error",
     "measure_provider_call",
     "parse_codex_exec_jsonl",
