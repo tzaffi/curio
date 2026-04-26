@@ -1,5 +1,6 @@
 import argparse
 import json
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +10,7 @@ JsonObject = dict[str, Any]
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SMOKE_ROOT = REPO_ROOT / "tmp" / "translate-smoke"
+DEFAULT_REPORT_ROOT = REPO_ROOT / "reports" / "translate-smoke"
 DEFAULT_EVALUATOR_MODEL = "gpt-5.5"
 DEFAULT_EVALUATOR_REASONING_EFFORT = "xhigh"
 DEFAULT_EVALUATOR_VERBOSITY = "medium"
@@ -165,6 +167,28 @@ def run_codex_evaluator(
     return completed.returncode
 
 
+def publish_report_artifacts(
+    artifacts: EvaluatorArtifacts,
+    *,
+    report_root: Path = DEFAULT_REPORT_ROOT,
+    include_raw_artifacts: bool = False,
+) -> Path:
+    report_dir = report_root / artifacts.run_root.name
+    report_dir.mkdir(parents=True, exist_ok=True)
+    _copy_if_exists(artifacts.output_path, report_dir / "evaluator-output.md")
+    (report_dir / "translations.md").write_text(_translations_markdown(artifacts.payload_path), encoding="utf-8")
+    if include_raw_artifacts:
+        _copy_if_exists(artifacts.run_root / "manifest.json", report_dir / "manifest.json")
+        _copy_if_exists(artifacts.evaluator_input_path, report_dir / "evaluator-input.jsonl")
+        _copy_if_exists(artifacts.payload_path, report_dir / "evaluator-payload.json")
+        _copy_if_exists(artifacts.prompt_path, report_dir / "evaluator-prompt.md")
+        _copy_if_exists(artifacts.events_path, report_dir / "evaluator-run.jsonl")
+        _copy_tree_if_exists(artifacts.run_root / "cases", report_dir / "cases")
+        _copy_tree_if_exists(artifacts.run_root / "runs", report_dir / "runs")
+        _copy_tree_if_exists(artifacts.run_root / "cli", report_dir / "cli")
+    return report_dir
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Prepare and run the Curio translation smoke evaluator.")
     parser.add_argument(
@@ -174,6 +198,18 @@ def main(argv: list[str] | None = None) -> int:
         help="Smoke run root, or 'latest' for the newest run with evaluator input.",
     )
     parser.add_argument("--prepare-only", action="store_true", help="Write evaluator payload/prompt without running Codex.")
+    parser.add_argument("--no-report", action="store_true", help="Do not publish artifacts under reports/translate-smoke.")
+    parser.add_argument(
+        "--include-raw-artifacts",
+        action="store_true",
+        help="Also copy machine/debug artifacts into reports. Human reports omit these by default.",
+    )
+    parser.add_argument(
+        "--report-root",
+        type=Path,
+        default=DEFAULT_REPORT_ROOT,
+        help="Directory for durable report copies.",
+    )
     parser.add_argument("--model", default=DEFAULT_EVALUATOR_MODEL)
     parser.add_argument("--reasoning-effort", default=DEFAULT_EVALUATOR_REASONING_EFFORT)
     parser.add_argument("--verbosity", default=DEFAULT_EVALUATOR_VERBOSITY)
@@ -185,6 +221,13 @@ def main(argv: list[str] | None = None) -> int:
     print(f"prompt: {artifacts.prompt_path}")
     print(f"payload: {artifacts.payload_path}")
     if args.prepare_only:
+        if not args.no_report:
+            report_dir = publish_report_artifacts(
+                artifacts,
+                report_root=args.report_root,
+                include_raw_artifacts=args.include_raw_artifacts,
+            )
+            print(f"report: {report_dir}")
         return 0
     return_code = run_codex_evaluator(
         artifacts,
@@ -194,6 +237,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(f"events: {artifacts.events_path}")
     print(f"output: {artifacts.output_path}")
+    if not args.no_report:
+        report_dir = publish_report_artifacts(
+            artifacts,
+            report_root=args.report_root,
+            include_raw_artifacts=args.include_raw_artifacts,
+        )
+        print(f"report: {report_dir}")
     return return_code
 
 
@@ -242,6 +292,66 @@ def _read_optional_json(path: Path) -> JsonObject | None:
 
 def _write_json(path: Path, payload: JsonObject) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _copy_if_exists(source: Path, destination: Path) -> None:
+    if source.exists():
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+
+
+def _copy_tree_if_exists(source: Path, destination: Path) -> None:
+    if source.exists():
+        shutil.copytree(source, destination, dirs_exist_ok=True)
+
+
+def _translations_markdown(payload_path: Path) -> str:
+    payload = _read_json(payload_path)
+    records = payload.get("records")
+    if not isinstance(records, list):
+        raise EvaluatorError(f"{payload_path} must contain a records list")
+    lines = ["# Retained Translation Outputs", ""]
+    for record in records:
+        if not isinstance(record, dict):
+            raise EvaluatorError(f"{payload_path} records must be JSON objects")
+        lines.extend(_translation_record_markdown(record))
+    return "\n".join(lines) + "\n"
+
+
+def _translation_record_markdown(record: JsonObject) -> list[str]:
+    case_id = _require_string(record.get("case_id"), "case_id")
+    caller = _require_string(record.get("caller"), "caller")
+    cost = record.get("cost")
+    cost_text = str(cost) if isinstance(cost, int | float) and not isinstance(cost, bool) else "unknown"
+    source_text = _require_string(record.get("source_text"), "source_text")
+    translated_text = _require_string(record.get("translated_text"), "translated_text")
+    intent = _require_string(record.get("expected_translation_intent"), "expected_translation_intent")
+    requirements = record.get("preservation_requirements")
+    requirement_lines = []
+    if isinstance(requirements, list):
+        requirement_lines = [f"- {requirement}" for requirement in requirements if isinstance(requirement, str)]
+    return [
+        f"## {case_id} / {caller}",
+        "",
+        f"- Cost: `{cost_text}`",
+        f"- Expected intent: {intent}",
+        "",
+        "Preservation requirements:",
+        *requirement_lines,
+        "",
+        "Source:",
+        "",
+        "```text",
+        source_text,
+        "```",
+        "",
+        "Translation:",
+        "",
+        "```text",
+        translated_text,
+        "```",
+        "",
+    ]
 
 
 def _require_string(value: object, name: str) -> str:

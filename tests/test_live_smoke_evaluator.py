@@ -9,6 +9,7 @@ from live_smoke_evaluator import (
     build_codex_evaluator_command,
     build_evaluator_prompt,
     prepare_evaluator_artifacts,
+    publish_report_artifacts,
     resolve_run_root,
 )
 
@@ -16,10 +17,14 @@ from live_smoke_evaluator import (
 def make_run(tmp_path: Path, run_id: str = "20260426-000000-test") -> Path:
     run_root = tmp_path / run_id
     evaluation_dir = run_root / "evaluation"
+    case_dir = run_root / "cases" / "C-JA-01"
     run_dir = run_root / "runs" / "C-JA-01" / "translator_codex_gpt_54_mini"
     evaluation_dir.mkdir(parents=True)
+    case_dir.mkdir(parents=True)
     run_dir.mkdir(parents=True)
     (run_root / "manifest.json").write_text(json.dumps({"run_id": run_id}), encoding="utf-8")
+    (case_dir / "source.txt").write_text("こんにちは", encoding="utf-8")
+    (case_dir / "expected.md").write_text("Translate greeting.", encoding="utf-8")
     (run_dir / "usage.json").write_text(
         json.dumps(
             {
@@ -99,6 +104,48 @@ def test_build_codex_evaluator_command_uses_gpt55_xhigh_defaults(tmp_path: Path)
     assert 'model_verbosity="medium"' in command
     assert command[command.index("--output-last-message") + 1] == str(artifacts.output_path)
     assert command[-1] == "-"
+
+
+def test_publish_report_artifacts_defaults_to_human_docs(tmp_path: Path) -> None:
+    run_root = make_run(tmp_path)
+    artifacts = prepare_evaluator_artifacts(run_root)
+    artifacts.output_path.write_text("## Evaluator Output\n", encoding="utf-8")
+    artifacts.events_path.write_text('{"type":"turn.completed"}\n', encoding="utf-8")
+    (run_root / "cli").mkdir()
+    (run_root / "cli" / "default-caller.stdout").write_text("{}\n", encoding="utf-8")
+
+    report_dir = publish_report_artifacts(artifacts, report_root=tmp_path / "reports")
+
+    assert report_dir == tmp_path / "reports" / run_root.name
+    assert (report_dir / "evaluator-output.md").read_text(encoding="utf-8") == "## Evaluator Output\n"
+    translations = (report_dir / "translations.md").read_text(encoding="utf-8")
+    assert "C-JA-01 / translator_codex_gpt_54_mini" in translations
+    assert "Hello." in translations
+    assert not (report_dir / "README.md").exists()
+    assert not (report_dir / "manifest.json").exists()
+    assert not (report_dir / "evaluator-run.jsonl").exists()
+    assert not (report_dir / "runs").exists()
+
+
+def test_publish_report_artifacts_can_include_raw_debug_artifacts(tmp_path: Path) -> None:
+    run_root = make_run(tmp_path)
+    artifacts = prepare_evaluator_artifacts(run_root)
+    artifacts.events_path.write_text('{"type":"turn.completed"}\n', encoding="utf-8")
+    (run_root / "cli").mkdir()
+    (run_root / "cli" / "default-caller.stdout").write_text("{}\n", encoding="utf-8")
+
+    report_dir = publish_report_artifacts(
+        artifacts,
+        report_root=tmp_path / "reports",
+        include_raw_artifacts=True,
+    )
+
+    assert (report_dir / "manifest.json").exists()
+    assert (report_dir / "evaluator-prompt.md").exists()
+    assert (report_dir / "evaluator-run.jsonl").read_text(encoding="utf-8") == '{"type":"turn.completed"}\n'
+    assert (report_dir / "cases").exists()
+    assert (report_dir / "runs" / "C-JA-01" / "translator_codex_gpt_54_mini" / "usage.json").exists()
+    assert (report_dir / "cli" / "default-caller.stdout").exists()
 
 
 def test_resolve_run_root_accepts_latest_and_explicit_paths(tmp_path: Path) -> None:
