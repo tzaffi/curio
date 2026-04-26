@@ -303,6 +303,22 @@ def test_parse_codex_exec_jsonl_accepts_compatibility_event_shapes() -> None:
     assert result.usage_total_tokens == 7
 
 
+def test_parse_codex_exec_jsonl_ignores_codex_stdout_diagnostics() -> None:
+    output = "\n".join(
+        (
+            "Reading additional input from stdin...",
+            "2026-04-26T05:55:08.822038Z  WARN codex_core_plugins::manifest: ignored plugin warning",
+            json.dumps({"type": "agent_message", "text": json.dumps({"ok": True})}),
+            json.dumps({"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 2}}),
+        )
+    )
+
+    result = parse_codex_exec_jsonl(output)
+
+    assert result.output_value == {"ok": True}
+    assert result.usage_total_tokens == 3
+
+
 def test_parse_codex_exec_jsonl_allows_missing_usage() -> None:
     result = parse_codex_exec_jsonl("\n" + jsonl({"type": "agent_message", "text": "{}"}))
 
@@ -431,6 +447,60 @@ def test_codex_cli_client_calls_fake_runner_and_validates_schema(tmp_path: Path)
     assert response.usage.total_tokens == 8
 
 
+def test_codex_cli_client_strips_unsupported_response_format_schema_keywords(tmp_path: Path) -> None:
+    output_schema = {
+        "type": "object",
+        "uniqueItems": True,
+        "allOf": [{"required": ["items"]}],
+        "required": ["items"],
+        "properties": {
+            "items": {
+                "type": "array",
+                "uniqueItems": True,
+                "items": {"type": "object", "uniqueItems": True},
+            },
+            "maybe_text": {
+                "oneOf": [
+                    {"type": "string", "minLength": 1},
+                    {"type": "null"},
+                ]
+            },
+            "fixed": {"const": "value"},
+        },
+    }
+    runner = FakeCodexCliRunner(
+        stdout=jsonl(
+            {"type": "agent_message", "text": json.dumps({"items": [{}]})},
+            {"type": "turn.completed", "usage": {"input_tokens": 6, "output_tokens": 2, "total_tokens": 8}},
+        )
+    )
+    client = make_client(runner, tmp_path)
+
+    client.complete(make_request(output_schema=output_schema))
+
+    assert runner.schema_payload == {
+        "type": "object",
+        "required": ["items"],
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {"type": "object"},
+            },
+            "maybe_text": {"type": ["string", "null"], "minLength": 1},
+            "fixed": {"enum": ["value"]},
+        },
+    }
+    assert output_schema["uniqueItems"] is True
+    assert output_schema["allOf"] == [{"required": ["items"]}]
+    assert output_schema["properties"]["items"]["uniqueItems"] is True
+
+
+def test_codex_schema_one_of_union_rejects_non_simple_shapes() -> None:
+    assert codex_cli._simple_one_of_type_union("bad") is None
+    assert codex_cli._simple_one_of_type_union([1]) is None
+    assert codex_cli._simple_one_of_type_union([{"type": 1}]) is None
+
+
 def test_codex_cli_client_uses_chatgpt_cached_auth_without_curio_secret(tmp_path: Path) -> None:
     runner = FakeCodexCliRunner(stdout=jsonl({"type": "agent_message", "text": "{}"}))
     client = make_client(runner, tmp_path, auth_config=CodexCliAuthConfig(mode=CodexCliAuthMode.CHATGPT))
@@ -484,12 +554,39 @@ def test_codex_cli_client_maps_runner_failures_and_exit_status(tmp_path: Path) -
         timeout_client.complete(make_request())
     assert len(timeout_runner.calls) == 1
 
-    failed_runner = FakeCodexCliRunner(stderr="secret-ish stderr", return_code=7)
+    failed_runner = FakeCodexCliRunner(
+        stdout=jsonl(
+            {"type": "error", "message": "codex rejected the request"},
+            {"type": "turn.failed", "error": {"message": "model unavailable"}},
+        ),
+        stderr="secret-ish stderr",
+        return_code=7,
+    )
     failed_client = make_client(failed_runner, tmp_path)
     with pytest.raises(LlmRejectedRequestError) as failed:
         failed_client.complete(make_request())
-    assert str(failed.value) == "codex_cli subprocess exited with status 7"
+    assert str(failed.value) == "codex_cli subprocess exited with status 7: model unavailable"
+    assert "codex rejected the request" not in str(failed.value)
     assert "secret-ish" not in str(failed.value)
+
+    failed_without_detail_runner = FakeCodexCliRunner(
+        stdout="\n".join(
+            (
+                "Reading additional input from stdin...",
+                "2026-04-26T05:55:08.822038Z  WARN codex_core_plugins::manifest: ignored plugin warning",
+                "not json",
+                json.dumps([]),
+                json.dumps({"message": "missing type"}),
+                json.dumps({"type": "error", "message": ""}),
+                json.dumps({"type": "turn.failed", "error": "bad shape"}),
+            )
+        ),
+        return_code=9,
+    )
+    failed_without_detail_client = make_client(failed_without_detail_runner, tmp_path)
+    with pytest.raises(LlmRejectedRequestError) as failed_without_detail:
+        failed_without_detail_client.complete(make_request())
+    assert str(failed_without_detail.value) == "codex_cli subprocess exited with status 9"
 
 
 def test_codex_cli_client_reports_invalid_or_schema_invalid_output(tmp_path: Path) -> None:

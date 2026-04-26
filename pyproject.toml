@@ -46,6 +46,9 @@ addopts = [
     "--cov=curio",
     "--cov-report=term-missing",
 ]
+markers = [
+    "live_codex_cli: skipped by default; set CURIO_LIVE_CODEX_CLI_TESTS=1 to run Codex CLI live smoke tests",
+]
 testpaths = ["tests"]
 
 [tool.coverage.run]

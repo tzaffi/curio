@@ -147,3 +147,19 @@ Curio fails instead of guessing when:
 - a named caller has an invalid model, timeout, or tuning value
 
 See [AUTHENTICATION.md](AUTHENTICATION.md) for the secure setup details.
+
+## Live Translation Smoke Tests
+
+Live smoke tests are opt-in and Codex CLI-only. They are not part of
+`make check`.
+
+Use:
+
+```bash
+make translate-smoke
+make translate-smoke-evaluate
+```
+
+See [SMOKE-TESTS.md](SMOKE-TESTS.md) for prerequisites, the reviewed case/model
+matrix, artifact locations, evaluator workflow, and common failure messages.
+See [the current smoke-test upshot](reports/translate-smoke/20260426-060103-22de460b22c0/UPSHOT.md) for the recommended translation caller.

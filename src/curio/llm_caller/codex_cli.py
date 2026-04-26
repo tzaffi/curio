@@ -12,6 +12,7 @@ from jsonschema.exceptions import ValidationError as JsonSchemaLibraryError
 
 from curio.llm_caller.auth import CodexCliAuthConfig, CodexCliAuthMode
 from curio.llm_caller.models import (
+    JsonObject,
     JsonValue,
     LlmCapability,
     LlmConfigurationError,
@@ -202,7 +203,7 @@ class CodexCliClient(ProviderClientBase):
             )
             run_result = self._run(command, timeout_seconds=self.timeout_seconds)
         if run_result.return_code != 0:
-            raise LlmRejectedRequestError(f"codex_cli subprocess exited with status {run_result.return_code}")
+            raise LlmRejectedRequestError(_codex_exit_status_message(run_result))
         exec_result = parse_codex_exec_jsonl(run_result.stdout)
         _validate_output_schema(request, exec_result.output_value)
         return build_codex_llm_response(
@@ -355,7 +356,51 @@ def _validate_codex_auth_config(auth_config: CodexCliAuthConfig) -> None:
 
 
 def _write_output_schema(request: LlmRequest, output_schema_path: Path) -> None:
-    output_schema_path.write_text(json.dumps(request.output.schema), encoding="utf-8")
+    output_schema_path.write_text(json.dumps(_codex_response_format_schema(request.output.schema)), encoding="utf-8")
+
+
+def _codex_response_format_schema(schema: Mapping[str, JsonValue]) -> JsonValue:
+    return _without_unsupported_codex_schema_keywords(schema)
+
+
+def _without_unsupported_codex_schema_keywords(value: JsonValue) -> JsonValue:
+    if isinstance(value, Mapping):
+        sanitized: JsonObject = {}
+        for key, child in value.items():
+            if key in ("uniqueItems", "allOf", "if", "then", "else"):
+                continue
+            if key == "const":
+                sanitized["enum"] = [_without_unsupported_codex_schema_keywords(child)]
+            elif key == "oneOf":
+                type_union = _simple_one_of_type_union(child)
+                if type_union is not None:
+                    sanitized.update(type_union)
+            else:
+                sanitized[key] = _without_unsupported_codex_schema_keywords(child)
+        return sanitized
+    if isinstance(value, list):
+        return [_without_unsupported_codex_schema_keywords(item) for item in value]
+    return value
+
+
+def _simple_one_of_type_union(value: JsonValue) -> JsonObject | None:
+    if not isinstance(value, list):
+        return None
+    types: list[str] = []
+    merged_constraints: JsonObject = {}
+    for option in value:
+        if not isinstance(option, Mapping):
+            return None
+        schema_type = option.get("type")
+        if not isinstance(schema_type, str):
+            return None
+        types.append(schema_type)
+        if schema_type == "null":
+            continue
+        for key, child in option.items():
+            if key != "type":
+                merged_constraints[key] = _without_unsupported_codex_schema_keywords(child)
+    return {"type": types, **merged_constraints}
 
 
 def _validate_output_schema(request: LlmRequest, output_value: JsonValue) -> None:
@@ -380,16 +425,66 @@ def _format_message(message: LlmMessage) -> str:
 def _iter_jsonl_events(stdout: str) -> list[Mapping[str, JsonValue]]:
     events: list[Mapping[str, JsonValue]] = []
     for line_number, line in enumerate(stdout.splitlines(), start=1):
-        if not line.strip():
+        stripped_line = line.strip()
+        if not stripped_line or _is_codex_stdout_diagnostic(stripped_line):
             continue
         try:
-            event = json.loads(line)
+            event = json.loads(stripped_line)
         except json.JSONDecodeError as exc:
             raise LlmInvalidOutputError(f"codex_cli JSONL line {line_number} is not valid JSON") from exc
         if not isinstance(event, Mapping):
             raise LlmInvalidOutputError(f"codex_cli JSONL line {line_number} must be an object")
         events.append(cast(Mapping[str, JsonValue], event))
     return events
+
+
+def _codex_exit_status_message(run_result: CodexCliRunResult) -> str:
+    message = f"codex_cli subprocess exited with status {run_result.return_code}"
+    detail = _codex_failure_detail(run_result.stdout)
+    if detail is None:
+        return message
+    return f"{message}: {detail}"
+
+
+def _codex_failure_detail(stdout: str) -> str | None:
+    messages: list[str] = []
+    for line in stdout.splitlines():
+        stripped_line = line.strip()
+        if not stripped_line or _is_codex_stdout_diagnostic(stripped_line):
+            continue
+        try:
+            event = json.loads(stripped_line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, Mapping):
+            continue
+        event_type_value = event.get("type")
+        if not isinstance(event_type_value, str):
+            continue
+        event_type = event_type_value
+        if event_type == "error":
+            message = event.get("message")
+            if isinstance(message, str) and message.strip():
+                messages.append(message)
+        elif event_type == "turn.failed":
+            error = event.get("error")
+            if isinstance(error, Mapping):
+                message = error.get("message")
+                if isinstance(message, str) and message.strip():
+                    messages.append(message)
+    if not messages:
+        return None
+    return messages[-1]
+
+
+def _is_codex_stdout_diagnostic(line: str) -> bool:
+    return line == "Reading additional input from stdin..." or _is_codex_log_line(line)
+
+
+def _is_codex_log_line(line: str) -> bool:
+    if len(line) < 31 or line[4:5] != "-" or line[7:8] != "-" or line[10:11] != "T":
+        return False
+    return " WARN " in line or " INFO " in line or " DEBUG " in line or " TRACE " in line or " ERROR " in line
 
 
 def _extract_agent_message_text(payload: Mapping[str, JsonValue]) -> str:

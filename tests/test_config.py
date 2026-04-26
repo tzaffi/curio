@@ -75,6 +75,13 @@ def test_checked_in_codex_example_config_parses() -> None:
     assert mini_config.codex_exec_config.model_verbosity == CodexCliVerbosity.LOW
     assert_default_translation_prompt_config(mini_config.prompt_config)
 
+    gpt54_config = config.llm_caller_config("translator_codex_gpt_54")
+    assert gpt54_config.model == "gpt-5.4"
+    assert gpt54_config.codex_exec_config is not None
+    assert gpt54_config.codex_exec_config.model_reasoning_effort == CodexCliReasoningEffort.LOW
+    assert gpt54_config.codex_exec_config.model_verbosity == CodexCliVerbosity.MEDIUM
+    assert_default_translation_prompt_config(gpt54_config.prompt_config)
+
 
 def test_checked_in_openai_example_config_parses() -> None:
     config = load_config(repo_root() / "config.example.openai_api.json")

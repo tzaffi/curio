@@ -52,8 +52,35 @@
         "json_events": true,
         "skip_git_repo_check": false,
         "ignore_user_config": false,
-        "model_reasoning_effort": "minimal",
+        "model_reasoning_effort": "low",
         "model_verbosity": "low",
+        "extra_config": []
+      }
+    },
+    "translator_codex_gpt_54": {
+      "provider": "codex_cli",
+      "model": "gpt-5.4",
+      "timeout_seconds": 300,
+      "prompt": {
+        "instructions": "Return only JSON that satisfies the provided schema. Classify each source block and conditionally translate it into English.",
+        "user": "Use the translation request JSON below to classify language and conditionally translate each block into English.\n\nRules:\n- Target language is exactly en.\n- Estimate english_confidence_estimate for each source block.\n- Set translation_required to false and translated_text to null only when the block is English above the threshold.\n- Otherwise set translation_required to true and translate the full source block into English.\n- Preserve source meaning; do not summarize or add interpretation.\n- Preserve URLs, code identifiers, hashtags, handles, filenames, and quoted strings unless natural language inside them clearly needs translation.\n- Preserve input block order and return exactly one output block for each input block.\n- Emit compact warnings only for corrupt text, partially untranslatable fragments, schema-repair events, mixed-language ambiguity, or provider/runtime issues.\n\nTranslation request JSON:\n{translation_request_json}\n\nRequired output JSON Schema:\n{output_schema_json}"
+      },
+      "auth": {
+        "provider": "codex_cli",
+        "mode": "chatgpt",
+        "api_key_ref": null,
+        "require_keyring_credentials_store": true
+      },
+      "exec": {
+        "executable": "codex",
+        "sandbox": "read-only",
+        "color": "never",
+        "ephemeral": true,
+        "json_events": true,
+        "skip_git_repo_check": false,
+        "ignore_user_config": false,
+        "model_reasoning_effort": "low",
+        "model_verbosity": "medium",
         "extra_config": []
       }
     }
