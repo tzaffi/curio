@@ -1,12 +1,14 @@
 import json
 
+from curio.config import LlmCallerPromptConfig
 from curio.llm_caller import LlmCapability, LlmMessageRole
 from curio.schemas import SchemaName, load_schema, validate_json
 from curio.translate import Block, TranslationRequest
 from curio.translate.adapter import (
-    TRANSLATION_INSTRUCTIONS,
+    DEFAULT_TRANSLATION_INSTRUCTIONS,
     TRANSLATION_MODEL_OUTPUT_SCHEMA_NAME,
     TRANSLATION_WORKFLOW,
+    build_translation_instructions,
     build_translation_llm_request,
     build_translation_prompt,
     translation_model_output_schema,
@@ -15,7 +17,7 @@ from curio.translate.adapter import (
 
 def make_request(
     *,
-    llm_caller: str | None = "codex_gpt_55",
+    llm_caller: str | None = "translator_codex_gpt_55",
 ) -> TranslationRequest:
     return TranslationRequest(
         request_id="translate-test",
@@ -60,6 +62,40 @@ def test_build_translation_prompt_embeds_request_and_output_schema() -> None:
     assert json.dumps(translation_model_output_schema(), ensure_ascii=False, indent=2, sort_keys=True) in prompt
 
 
+def test_build_translation_prompt_uses_custom_prompt_config() -> None:
+    request = make_request()
+    prompt_config = LlmCallerPromptConfig(
+        instructions="Custom instructions for {request_id} in {target_language}",
+        user=(
+            "Custom user threshold {english_confidence_threshold}\n"
+            "{translation_request_json}\n"
+            "{output_schema_json}"
+        ),
+    )
+
+    instructions = build_translation_instructions(request, prompt_config)
+    prompt = build_translation_prompt(request, prompt_config)
+    llm_request = build_translation_llm_request(request, prompt_config)
+
+    assert instructions == "Custom instructions for translate-test in en"
+    assert "Custom user threshold 0.9" in prompt
+    assert json.dumps(request.to_json(), ensure_ascii=False, indent=2, sort_keys=True) in prompt
+    assert json.dumps(translation_model_output_schema(), ensure_ascii=False, indent=2, sort_keys=True) in prompt
+    assert llm_request.instructions == instructions
+    assert llm_request.input[0].content[0].text == prompt
+
+
+def test_build_translation_prompt_allows_partial_prompt_config() -> None:
+    request = make_request()
+    instructions_only = LlmCallerPromptConfig(instructions="Only {request_id}")
+    user_only = LlmCallerPromptConfig(user="Only user {target_language}")
+
+    assert build_translation_instructions(request, instructions_only) == "Only translate-test"
+    assert build_translation_prompt(request, instructions_only) == build_translation_prompt(request)
+    assert build_translation_instructions(request, user_only) == DEFAULT_TRANSLATION_INSTRUCTIONS
+    assert build_translation_prompt(request, user_only) == "Only user en"
+
+
 def test_build_translation_llm_request_maps_translation_request() -> None:
     request = make_request()
 
@@ -68,14 +104,14 @@ def test_build_translation_llm_request_maps_translation_request() -> None:
 
     assert llm_request.request_id == "translate-test"
     assert llm_request.workflow == TRANSLATION_WORKFLOW
-    assert llm_request.instructions == TRANSLATION_INSTRUCTIONS
+    assert llm_request.instructions == DEFAULT_TRANSLATION_INSTRUCTIONS
     assert llm_request.required_capabilities == (
         LlmCapability.TEXT_GENERATION,
         LlmCapability.JSON_SCHEMA_OUTPUT,
     )
     assert llm_request.metadata == {
         "source": "curio.translate",
-        "llm_caller": "codex_gpt_55",
+        "llm_caller": "translator_codex_gpt_55",
     }
     assert llm_request.input[0].role == LlmMessageRole.USER
     assert llm_request.input[0].content[0].text == build_translation_prompt(request)

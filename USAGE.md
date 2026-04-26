@@ -23,21 +23,24 @@ default. Pass `--llm-caller NAME` only when you want to override the config or
 structured JSON request for one run.
 
 Each named caller owns its provider, model, auth config, timeout, and
-provider-specific tuning. Runtime model overrides are intentionally not
-supported.
+provider-specific tuning. Translator callers in the example configs also define
+`prompt` templates for model-specific translator instructions and user prompt
+text. Runtime model overrides are intentionally not supported.
 
 Raw secrets do not go in `config.json`. Only Keychain locator metadata belongs
 there.
 
 ## Codex CLI Values
 
-Use a Codex caller such as `codex_gpt_55` or `codex_gpt_54_mini`.
+Use a Codex caller such as `translator_codex_gpt_55` or `translator_codex_gpt_54_mini`.
 
 Important fields:
 
 - `llm_callers.NAME.provider`: `codex_cli`
 - `llm_callers.NAME.model`: the Codex model for this named caller
 - `llm_callers.NAME.timeout_seconds`: provider-call wall-clock timeout
+- `llm_callers.NAME.prompt.instructions`: optional translator instructions template
+- `llm_callers.NAME.prompt.user`: optional translator user prompt template
 - `llm_callers.NAME.auth.mode`: use `chatgpt` for normal ChatGPT-plan login
 - `llm_callers.NAME.exec.model_reasoning_effort`: optional Codex reasoning effort
 - `llm_callers.NAME.exec.model_verbosity`: optional Codex verbosity
@@ -54,13 +57,15 @@ uv run curio translate "bonjour"
 
 ## OpenAI API Values
 
-Use an OpenAI caller such as `openai_gpt_54_mini_cold`.
+Use an OpenAI caller such as `translator_openai_gpt_54_mini_cold`.
 
 Important fields:
 
 - `llm_callers.NAME.provider`: `openai_api`
 - `llm_callers.NAME.model`: the OpenAI model for this named caller
 - `llm_callers.NAME.timeout_seconds`: provider-call wall-clock timeout
+- `llm_callers.NAME.prompt.instructions`: optional translator instructions template
+- `llm_callers.NAME.prompt.user`: optional translator user prompt template
 - `llm_callers.NAME.auth.api_key_ref.service`
 - `llm_callers.NAME.auth.api_key_ref.account`
 - `llm_callers.NAME.responses.temperature`
@@ -98,7 +103,7 @@ uv run curio translate --config ./my-curio-config.json "bonjour"
 Override the configured translation caller for one run:
 
 ```bash
-uv run curio translate --llm-caller openai_gpt_54_mini_cold "bonjour"
+uv run curio translate --llm-caller translator_openai_gpt_54_mini_cold "bonjour"
 ```
 
 Translation caller precedence is:
@@ -106,6 +111,29 @@ Translation caller precedence is:
 1. CLI `--llm-caller`
 2. structured JSON `llm_caller`
 3. `config.json` `translate.llm_caller`
+
+## Prompt Overrides
+
+Use `prompt` only for translator-specific named callers, usually with a
+`translator_` prefix. The example configs include the default translator prompt;
+customize it per named caller when a model needs different wording:
+
+```json
+{
+  "llm_callers": {
+    "translator_codex_gpt_54_mini": {
+      "prompt": {
+        "instructions": "Return only JSON for translation request {request_id}.",
+        "user": "Translate with threshold {english_confidence_threshold}.\n\nRequest:\n{translation_request_json}\n\nSchema:\n{output_schema_json}"
+      }
+    }
+  }
+}
+```
+
+Supported placeholders are `{translation_request_json}`, `{output_schema_json}`,
+`{request_id}`, `{target_language}`, and `{english_confidence_threshold}`.
+Literal braces use normal Python escaping: `{{` and `}}`.
 
 ## Expected Fail-Fast Behavior
 

@@ -2,6 +2,7 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from string import Formatter
 from typing import Any, cast
 
 from curio.llm_caller.auth import (
@@ -14,10 +15,31 @@ from curio.llm_caller.models import ProviderName
 from curio.llm_caller.openai_api import OpenAiResponsesConfig
 
 JsonObject = dict[str, Any]
+LLM_CALLER_PROMPT_TEMPLATE_FIELDS = frozenset(
+    (
+        "translation_request_json",
+        "output_schema_json",
+        "request_id",
+        "target_language",
+        "english_confidence_threshold",
+    )
+)
 
 
 class ConfigError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class LlmCallerPromptConfig:
+    instructions: str | None = None
+    user: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.instructions is not None:
+            _validate_prompt_template(self.instructions, "prompt.instructions")
+        if self.user is not None:
+            _validate_prompt_template(self.user, "prompt.user")
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +49,7 @@ class LlmCallerConfig:
     model: str
     auth_config: ProviderAuthConfig
     timeout_seconds: int
+    prompt_config: LlmCallerPromptConfig | None = None
     codex_exec_config: CodexCliExecConfig | None = None
     openai_responses_config: OpenAiResponsesConfig | None = None
 
@@ -108,6 +131,7 @@ def _parse_llm_caller_config(name: str, data: Mapping[str, object]) -> LlmCaller
     auth_data = _require_mapping(data.get("auth"), f"{path}.auth")
     model = _require_string(data.get("model"), f"{path}.model")
     timeout_seconds = _require_positive_int(data.get("timeout_seconds"), f"{path}.timeout_seconds")
+    prompt_config = _parse_prompt_config(data.get("prompt"), path)
     if provider == ProviderName.OPENAI_API:
         return LlmCallerConfig(
             name=name,
@@ -115,6 +139,7 @@ def _parse_llm_caller_config(name: str, data: Mapping[str, object]) -> LlmCaller
             model=model,
             auth_config=OpenAiApiAuthConfig.from_json(auth_data),
             timeout_seconds=timeout_seconds,
+            prompt_config=prompt_config,
             openai_responses_config=_parse_openai_responses_config(
                 _require_mapping(data.get("responses"), f"{path}.responses"),
                 path,
@@ -126,10 +151,21 @@ def _parse_llm_caller_config(name: str, data: Mapping[str, object]) -> LlmCaller
         model=model,
         auth_config=CodexCliAuthConfig.from_json(auth_data),
         timeout_seconds=timeout_seconds,
+        prompt_config=prompt_config,
         codex_exec_config=_parse_codex_exec_config(
             _require_mapping(data.get("exec"), f"{path}.exec"),
             path,
         ),
+    )
+
+
+def _parse_prompt_config(value: object, caller_path: str) -> LlmCallerPromptConfig | None:
+    if value is None:
+        return None
+    data = _require_mapping(value, f"{caller_path}.prompt")
+    return LlmCallerPromptConfig(
+        instructions=_require_optional_string(data.get("instructions"), f"{caller_path}.prompt.instructions"),
+        user=_require_optional_string(data.get("user"), f"{caller_path}.prompt.user"),
     )
 
 
@@ -231,3 +267,22 @@ def _require_bool(value: object, name: str) -> bool:
     if isinstance(value, bool):
         return value
     raise ConfigError(f"config.json must define a boolean '{name}'")
+
+
+def _validate_prompt_template(value: object, name: str) -> str:
+    template = _require_string(value, name)
+    try:
+        parsed_template = tuple(Formatter().parse(template))
+    except ValueError as exc:
+        raise ConfigError(f"config.json '{name}' must be a valid Python format template") from exc
+    for _, field_name, format_spec, conversion in parsed_template:
+        if field_name is None:
+            continue
+        if field_name not in LLM_CALLER_PROMPT_TEMPLATE_FIELDS:
+            allowed = ", ".join(sorted(LLM_CALLER_PROMPT_TEMPLATE_FIELDS))
+            raise ConfigError(f"config.json '{name}' uses unsupported placeholder '{field_name}'; allowed: {allowed}")
+        if conversion is not None:
+            raise ConfigError(f"config.json '{name}' must not use format conversions")
+        if format_spec:
+            raise ConfigError(f"config.json '{name}' must not use format specs")
+    return template

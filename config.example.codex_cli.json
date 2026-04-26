@@ -1,12 +1,16 @@
 {
   "translate": {
-    "llm_caller": "codex_gpt_54_mini"
+    "llm_caller": "translator_codex_gpt_54_mini"
   },
   "llm_callers": {
-    "codex_gpt_55": {
+    "translator_codex_gpt_55": {
       "provider": "codex_cli",
       "model": "gpt-5.5",
       "timeout_seconds": 300,
+      "prompt": {
+        "instructions": "Return only JSON that satisfies the provided schema. Classify each source block and conditionally translate it into English.",
+        "user": "Use the translation request JSON below to classify language and conditionally translate each block into English.\n\nRules:\n- Target language is exactly en.\n- Estimate english_confidence_estimate for each source block.\n- Set translation_required to false and translated_text to null only when the block is English above the threshold.\n- Otherwise set translation_required to true and translate the full source block into English.\n- Preserve source meaning; do not summarize or add interpretation.\n- Preserve URLs, code identifiers, hashtags, handles, filenames, and quoted strings unless natural language inside them clearly needs translation.\n- Preserve input block order and return exactly one output block for each input block.\n- Emit compact warnings only for corrupt text, partially untranslatable fragments, schema-repair events, mixed-language ambiguity, or provider/runtime issues.\n\nTranslation request JSON:\n{translation_request_json}\n\nRequired output JSON Schema:\n{output_schema_json}"
+      },
       "auth": {
         "provider": "codex_cli",
         "mode": "chatgpt",
@@ -26,10 +30,14 @@
         "extra_config": []
       }
     },
-    "codex_gpt_54_mini": {
+    "translator_codex_gpt_54_mini": {
       "provider": "codex_cli",
       "model": "gpt-5.4-mini",
       "timeout_seconds": 300,
+      "prompt": {
+        "instructions": "Return only JSON that satisfies the provided schema. Classify each source block and conditionally translate it into English.",
+        "user": "Use the translation request JSON below to classify language and conditionally translate each block into English.\n\nRules:\n- Target language is exactly en.\n- Estimate english_confidence_estimate for each source block.\n- Set translation_required to false and translated_text to null only when the block is English above the threshold.\n- Otherwise set translation_required to true and translate the full source block into English.\n- Preserve source meaning; do not summarize or add interpretation.\n- Preserve URLs, code identifiers, hashtags, handles, filenames, and quoted strings unless natural language inside them clearly needs translation.\n- Preserve input block order and return exactly one output block for each input block.\n- Emit compact warnings only for corrupt text, partially untranslatable fragments, schema-repair events, mixed-language ambiguity, or provider/runtime issues.\n\nTranslation request JSON:\n{translation_request_json}\n\nRequired output JSON Schema:\n{output_schema_json}"
+      },
       "auth": {
         "provider": "codex_cli",
         "mode": "chatgpt",

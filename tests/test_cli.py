@@ -7,7 +7,7 @@ from typer.testing import CliRunner
 
 import curio.cli as cli
 from curio.cli import app
-from curio.config import TranslateConfig
+from curio.config import LlmCallerPromptConfig, TranslateConfig
 from curio.llm_caller import (
     LlmOutput,
     LlmProviderNotFoundError,
@@ -30,8 +30,20 @@ runner = CliRunner()
 
 
 class FakeCurioConfig:
-    def __init__(self, llm_caller: str | None) -> None:
+    def __init__(
+        self,
+        llm_caller: str | None,
+        prompt_configs: dict[str, LlmCallerPromptConfig | None] | None = None,
+    ) -> None:
         self.translate_config = TranslateConfig(llm_caller=llm_caller)
+        self.prompt_configs = {} if prompt_configs is None else dict(prompt_configs)
+
+    def llm_caller_config(self, name: str) -> object:
+        class FakeCallerConfig:
+            def __init__(self, prompt_config: LlmCallerPromptConfig | None) -> None:
+                self.prompt_config = prompt_config
+
+        return FakeCallerConfig(self.prompt_configs.get(name))
 
 
 def make_usage() -> LlmUsage:
@@ -66,9 +78,7 @@ class FakeTranslationService:
             request_id=request.request_id,
             blocks=tuple(self._block_response(block) for block in request.blocks),
             llm=LlmSummary(
-                provider=ProviderName.OPENAI_API
-                if (request.llm_caller or "").startswith("openai")
-                else ProviderName.CODEX_CLI,
+                provider=ProviderName.OPENAI_API if "openai" in (request.llm_caller or "") else ProviderName.CODEX_CLI,
                 model=request.llm_caller,
                 usage=make_usage(),
             ),
@@ -102,11 +112,20 @@ def _fake_translation(text: str) -> str:
 
 
 def install_fake_service(monkeypatch: pytest.MonkeyPatch, service: FakeTranslationService) -> None:
-    monkeypatch.setattr(cli, "_build_translation_service", lambda _llm_caller, _config_path, config=None: service)
+    monkeypatch.setattr(
+        cli,
+        "_build_translation_service",
+        lambda _llm_caller, _config_path, config=None: service,
+    )
+    install_fake_config(monkeypatch, "translator_codex_gpt_54_mini")
 
 
-def install_fake_config(monkeypatch: pytest.MonkeyPatch, llm_caller: str | None) -> None:
-    monkeypatch.setattr(cli, "load_config", lambda _path: FakeCurioConfig(llm_caller))
+def install_fake_config(
+    monkeypatch: pytest.MonkeyPatch,
+    llm_caller: str | None,
+    prompt_configs: dict[str, LlmCallerPromptConfig | None] | None = None,
+) -> None:
+    monkeypatch.setattr(cli, "load_config", lambda _path: FakeCurioConfig(llm_caller, prompt_configs))
 
 
 class FakeLlmClient:
@@ -185,21 +204,26 @@ def test_cli_build_llm_caller_client_delegates_to_llm_factory(monkeypatch: pytes
     monkeypatch.setattr(cli, "load_config", lambda path: f"loaded:{path}")
     monkeypatch.setattr(cli, "build_llm_caller_client", fake_build_llm_caller_client)
 
-    assert cli._build_llm_caller_client("openai_gpt_54_mini_cold", Path("curio-config.json")) is client
-    assert calls == [("openai_gpt_54_mini_cold", "loaded:curio-config.json")]
+    assert cli._build_llm_caller_client("translator_openai_gpt_54_mini_cold", Path("curio-config.json")) is client
+    assert calls == [("translator_openai_gpt_54_mini_cold", "loaded:curio-config.json")]
 
 
 def test_translate_llm_caller_factory_errors_are_runtime_errors(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fail_llm_caller_client_build(llm_caller: str, config_path: Path | None) -> FakeLlmClient:
-        del config_path
+    def fail_llm_caller_client_build(
+        llm_caller: str,
+        config_path: Path | None,
+        config: object | None = None,
+    ) -> FakeLlmClient:
+        del config_path, config
         raise LlmProviderNotFoundError(f"llm caller client failed: {llm_caller}")
 
+    install_fake_config(monkeypatch, "translator_codex_gpt_54_mini")
     monkeypatch.setattr(cli, "_build_llm_caller_client", fail_llm_caller_client_build)
 
-    result = runner.invoke(app, ["translate", "--llm-caller", "codex_gpt_55", "bonjour"])
+    result = runner.invoke(app, ["translate", "--llm-caller", "translator_codex_gpt_55", "bonjour"])
 
     assert result.exit_code == 1
-    assert "llm caller client failed: codex_gpt_55" in result.output
+    assert "llm caller client failed: translator_codex_gpt_55" in result.output
 
 
 def test_translate_rejects_missing_llm_caller_for_raw_text(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -243,24 +267,118 @@ def test_translate_default_service_uses_llm_caller_factory(monkeypatch: pytest.M
     client = FakeLlmClient(ProviderName.OPENAI_API)
     llm_callers: list[str] = []
 
-    def fake_build_llm_caller_client(llm_caller: str, config_path: Path | None) -> FakeLlmClient:
-        del config_path
+    def fake_build_llm_caller_client(
+        llm_caller: str,
+        config_path: Path | None,
+        config: object | None = None,
+    ) -> FakeLlmClient:
+        del config_path, config
         llm_callers.append(llm_caller)
         return client
 
+    install_fake_config(monkeypatch, "translator_codex_gpt_54_mini")
     monkeypatch.setattr(cli, "_build_llm_caller_client", fake_build_llm_caller_client)
 
-    result = runner.invoke(app, ["translate", "--llm-caller", "openai_gpt_54_mini_cold", "bonjour"])
+    result = runner.invoke(app, ["translate", "--llm-caller", "translator_openai_gpt_54_mini_cold", "bonjour"])
 
     assert result.exit_code == 0
     assert result.output == "Hello\n"
-    assert llm_callers == ["openai_gpt_54_mini_cold"]
-    assert client.requests[0].metadata["llm_caller"] == "openai_gpt_54_mini_cold"
+    assert llm_callers == ["translator_openai_gpt_54_mini_cold"]
+    assert client.requests[0].metadata["llm_caller"] == "translator_openai_gpt_54_mini_cold"
+
+
+def test_translate_uses_configured_default_caller_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = FakeLlmClient(ProviderName.CODEX_CLI)
+    prompt_config = LlmCallerPromptConfig(
+        instructions="Instructions {request_id} {target_language}",
+        user="User {translation_request_json} {output_schema_json}",
+    )
+
+    install_fake_config(
+        monkeypatch,
+        "translator_codex_gpt_54_mini",
+        {"translator_codex_gpt_54_mini": prompt_config},
+    )
+    monkeypatch.setattr(
+        cli,
+        "_build_llm_caller_client",
+        lambda _llm_caller, _config_path, config=None: client,
+    )
+
+    result = runner.invoke(app, ["translate", "bonjour"])
+
+    assert result.exit_code == 0
+    assert client.requests[0].instructions.startswith("Instructions translate-")
+    assert client.requests[0].instructions.endswith(" en")
+    assert "User {" in client.requests[0].input[0].content[0].text
+    assert '"text": "bonjour"' in client.requests[0].input[0].content[0].text
+    assert '"translatedBlock"' in client.requests[0].input[0].content[0].text
+
+
+def test_translate_cli_override_uses_override_caller_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = FakeLlmClient(ProviderName.CODEX_CLI)
+    prompt_configs = {
+        "translator_codex_gpt_54_mini": LlmCallerPromptConfig(instructions="Default caller"),
+        "translator_codex_gpt_55": LlmCallerPromptConfig(instructions="Override caller {target_language}"),
+    }
+
+    install_fake_config(monkeypatch, "translator_codex_gpt_54_mini", prompt_configs)
+    monkeypatch.setattr(
+        cli,
+        "_build_llm_caller_client",
+        lambda _llm_caller, _config_path, config=None: client,
+    )
+
+    result = runner.invoke(app, ["translate", "--llm-caller", "translator_codex_gpt_55", "bonjour"])
+
+    assert result.exit_code == 0
+    assert client.requests[0].instructions == "Override caller en"
+
+
+def test_translate_json_caller_prompt_is_overridden_by_cli_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    client = FakeLlmClient(ProviderName.CODEX_CLI)
+    prompt_configs = {
+        "translator_openai_gpt_54_mini_cold": LlmCallerPromptConfig(instructions="JSON caller"),
+        "translator_codex_gpt_55": LlmCallerPromptConfig(instructions="CLI caller"),
+    }
+    input_path = tmp_path / "request.json"
+    request = TranslationRequest(
+        request_id="translate-from-json",
+        blocks=[Block(block_id=cli.RAW_CLI_BLOCK_ID, name=cli.RAW_CLI_BLOCK_NAME, source_language_hint="fr", text="bonjour")],
+        llm_caller="translator_openai_gpt_54_mini_cold",
+    )
+    input_path.write_text(json.dumps(request.to_json()), encoding="utf-8")
+
+    install_fake_config(monkeypatch, "translator_codex_gpt_54_mini", prompt_configs)
+    monkeypatch.setattr(
+        cli,
+        "_build_llm_caller_client",
+        lambda _llm_caller, _config_path, config=None: client,
+    )
+
+    json_result = runner.invoke(app, ["translate", "--input-json", str(input_path)])
+    assert json_result.exit_code == 0
+    assert client.requests[0].instructions == "JSON caller"
+    client.requests.clear()
+    override_result = runner.invoke(
+        app,
+        ["translate", "--input-json", str(input_path), "--llm-caller", "translator_codex_gpt_55"],
+    )
+
+    assert override_result.exit_code == 0
+    assert client.requests[0].instructions == "CLI caller"
 
 
 def test_build_translation_service_reuses_loaded_config(monkeypatch: pytest.MonkeyPatch) -> None:
     client = FakeLlmClient(ProviderName.CODEX_CLI)
-    loaded_config = FakeCurioConfig("codex_gpt_54_mini")
+    prompt_config = LlmCallerPromptConfig(instructions="Helper prompt {target_language}")
+    loaded_config = FakeCurioConfig(
+        "translator_codex_gpt_54_mini",
+        {"translator_codex_gpt_54_mini": prompt_config},
+    )
     calls: list[tuple[str, Path | None, object | None]] = []
 
     def fake_build_llm_caller_client(
@@ -273,10 +391,33 @@ def test_build_translation_service_reuses_loaded_config(monkeypatch: pytest.Monk
 
     monkeypatch.setattr(cli, "_build_llm_caller_client", fake_build_llm_caller_client)
 
-    service = cli._build_translation_service("codex_gpt_54_mini", Path("curio-config.json"), config=loaded_config)
+    service = cli._build_translation_service("translator_codex_gpt_54_mini", Path("curio-config.json"), config=loaded_config)
 
     assert service.llm_client is client
-    assert calls == [("codex_gpt_54_mini", Path("curio-config.json"), loaded_config)]
+    assert calls == [("translator_codex_gpt_54_mini", Path("curio-config.json"), loaded_config)]
+    assert service.prompt_config is prompt_config
+
+
+def test_build_translation_service_loads_config_when_not_preloaded(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = FakeLlmClient(ProviderName.CODEX_CLI)
+    loaded_config = FakeCurioConfig("translator_codex_gpt_54_mini")
+
+    def fake_build_llm_caller_client(
+        llm_caller: str,
+        config_path: Path | None,
+        config: object | None = None,
+    ) -> FakeLlmClient:
+        assert llm_caller == "translator_codex_gpt_54_mini"
+        assert config_path == Path("curio-config.json")
+        assert config is loaded_config
+        return client
+
+    monkeypatch.setattr(cli, "load_config", lambda _path: loaded_config)
+    monkeypatch.setattr(cli, "_build_llm_caller_client", fake_build_llm_caller_client)
+
+    service = cli._build_translation_service("translator_codex_gpt_54_mini", Path("curio-config.json"))
+
+    assert service.llm_client is client
 
 
 def test_translate_raw_text_uses_injected_service_and_prints_translated_text(
@@ -290,7 +431,7 @@ def test_translate_raw_text_uses_injected_service_and_prints_translated_text(
         [
             "translate",
             "--llm-caller",
-            "openai_gpt_54_mini_cold",
+            "translator_openai_gpt_54_mini_cold",
             "--source-language",
             "fr",
             "--english-confidence-threshold",
@@ -302,7 +443,7 @@ def test_translate_raw_text_uses_injected_service_and_prints_translated_text(
     assert result.exit_code == 0
     assert result.output == "Hello\n"
     request = service.requests[0]
-    assert request.llm_caller == "openai_gpt_54_mini_cold"
+    assert request.llm_caller == "translator_openai_gpt_54_mini_cold"
     assert request.english_confidence_threshold == 0.75
     assert request.blocks[0].source_language_hint == "fr"
     assert request.blocks[0].text == "bonjour"
@@ -311,13 +452,13 @@ def test_translate_raw_text_uses_injected_service_and_prints_translated_text(
 def test_translate_raw_text_uses_configured_default_llm_caller(monkeypatch: pytest.MonkeyPatch) -> None:
     service = FakeTranslationService()
     install_fake_service(monkeypatch, service)
-    install_fake_config(monkeypatch, "codex_gpt_54_mini")
+    install_fake_config(monkeypatch, "translator_codex_gpt_54_mini")
 
     result = runner.invoke(app, ["translate", "bonjour"])
 
     assert result.exit_code == 0
     assert result.output == "Hello\n"
-    assert service.requests[0].llm_caller == "codex_gpt_54_mini"
+    assert service.requests[0].llm_caller == "translator_codex_gpt_54_mini"
 
 
 def test_translate_raw_english_text_prints_original_text(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -326,7 +467,7 @@ def test_translate_raw_english_text_prints_original_text(monkeypatch: pytest.Mon
 
     result = runner.invoke(
         app,
-        ["translate", "--llm-caller", "codex_gpt_55", "--source-language", "en-US", "Already English."],
+        ["translate", "--llm-caller", "translator_codex_gpt_55", "--source-language", "en-US", "Already English."],
     )
 
     assert result.exit_code == 0
@@ -337,7 +478,7 @@ def test_translate_raw_text_json_output_includes_warnings(monkeypatch: pytest.Mo
     service = FakeTranslationService(warnings=["provider warning"], block_warnings=["block warning"])
     install_fake_service(monkeypatch, service)
 
-    result = runner.invoke(app, ["translate", "--llm-caller", "codex_gpt_55", "--json", "bonjour"])
+    result = runner.invoke(app, ["translate", "--llm-caller", "translator_codex_gpt_55", "--json", "bonjour"])
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
@@ -351,7 +492,7 @@ def test_translate_raw_text_non_json_emits_warnings_to_stderr(monkeypatch: pytes
     service = FakeTranslationService(warnings=["provider warning"], block_warnings=["block warning"])
     install_fake_service(monkeypatch, service)
 
-    result = runner.invoke(app, ["translate", "--llm-caller", "codex_gpt_55", "bonjour"])
+    result = runner.invoke(app, ["translate", "--llm-caller", "translator_codex_gpt_55", "bonjour"])
 
     assert result.exit_code == 0
     assert "provider warning" in result.output
@@ -363,7 +504,7 @@ def test_translate_reads_raw_text_from_stdin(monkeypatch: pytest.MonkeyPatch) ->
     service = FakeTranslationService()
     install_fake_service(monkeypatch, service)
 
-    result = runner.invoke(app, ["translate", "--llm-caller", "codex_gpt_55"], input="bonjour\n")
+    result = runner.invoke(app, ["translate", "--llm-caller", "translator_codex_gpt_55"], input="bonjour\n")
 
     assert result.exit_code == 0
     assert result.output == "Hello\n"
@@ -395,7 +536,7 @@ def test_translate_reads_input_file_and_writes_output_file(
 
     result = runner.invoke(
         app,
-        ["translate", "--llm-caller", "codex_gpt_55", "--input-file", str(input_path), "--output", str(output_path)],
+        ["translate", "--llm-caller", "translator_codex_gpt_55", "--input-file", str(input_path), "--output", str(output_path)],
     )
 
     assert result.exit_code == 0
@@ -417,7 +558,7 @@ def test_translate_reads_structured_input_json(monkeypatch: pytest.MonkeyPatch, 
                 text="今日は新しいモデルを公開します。",
             )
         ],
-        llm_caller="openai_gpt_54_mini_cold",
+        llm_caller="translator_openai_gpt_54_mini_cold",
     )
     input_path.write_text(json.dumps(request.to_json()), encoding="utf-8")
 
@@ -427,7 +568,7 @@ def test_translate_reads_structured_input_json(monkeypatch: pytest.MonkeyPatch, 
     payload = json.loads(result.output)
     assert payload["request_id"] == "translate-from-json"
     assert payload["blocks"][0]["translated_text"] == "Today we are releasing a new model."
-    assert service.requests[0].llm_caller == "openai_gpt_54_mini_cold"
+    assert service.requests[0].llm_caller == "translator_openai_gpt_54_mini_cold"
 
 
 def test_translate_structured_input_uses_configured_default_llm_caller(
@@ -436,7 +577,7 @@ def test_translate_structured_input_uses_configured_default_llm_caller(
 ) -> None:
     service = FakeTranslationService()
     install_fake_service(monkeypatch, service)
-    install_fake_config(monkeypatch, "codex_gpt_54_mini")
+    install_fake_config(monkeypatch, "translator_codex_gpt_54_mini")
     input_path = tmp_path / "request.json"
     request = TranslationRequest(
         request_id="translate-from-json",
@@ -447,7 +588,7 @@ def test_translate_structured_input_uses_configured_default_llm_caller(
     result = runner.invoke(app, ["translate", "--input-json", str(input_path)])
 
     assert result.exit_code == 0
-    assert service.requests[0].llm_caller == "codex_gpt_54_mini"
+    assert service.requests[0].llm_caller == "translator_codex_gpt_54_mini"
 
 
 def test_translate_structured_input_accepts_cli_llm_caller_when_request_omits_it(
@@ -470,7 +611,7 @@ def test_translate_structured_input_accepts_cli_llm_caller_when_request_omits_it
             "--input-json",
             str(input_path),
             "--llm-caller",
-            "codex_gpt_55",
+            "translator_codex_gpt_55",
             "--english-confidence-threshold",
             "0.5",
         ],
@@ -478,7 +619,7 @@ def test_translate_structured_input_accepts_cli_llm_caller_when_request_omits_it
 
     assert result.exit_code == 0
     request = service.requests[0]
-    assert request.llm_caller == "codex_gpt_55"
+    assert request.llm_caller == "translator_codex_gpt_55"
     assert request.english_confidence_threshold == 0.5
 
 
@@ -492,7 +633,7 @@ def test_translate_structured_input_lets_cli_llm_caller_override_json_llm_caller
     request = TranslationRequest(
         request_id="translate-from-json",
         blocks=[Block(block_id=1, name="message", source_language_hint="fr", text="bonjour")],
-        llm_caller="openai_gpt_54_mini_cold",
+        llm_caller="translator_openai_gpt_54_mini_cold",
     )
     input_path.write_text(json.dumps(request.to_json()), encoding="utf-8")
 
@@ -503,12 +644,12 @@ def test_translate_structured_input_lets_cli_llm_caller_override_json_llm_caller
             "--input-json",
             str(input_path),
             "--llm-caller",
-            "codex_gpt_55",
+            "translator_codex_gpt_55",
         ],
     )
 
     assert result.exit_code == 0
-    assert service.requests[0].llm_caller == "codex_gpt_55"
+    assert service.requests[0].llm_caller == "translator_codex_gpt_55"
 
 
 def test_translate_rejects_ambiguous_and_missing_input_modes(
@@ -522,7 +663,7 @@ def test_translate_rejects_ambiguous_and_missing_input_modes(
 
     ambiguous = runner.invoke(
         app,
-        ["translate", "--llm-caller", "codex_gpt_55", "--input-file", str(input_path), "bonjour"],
+        ["translate", "--llm-caller", "translator_codex_gpt_55", "--input-file", str(input_path), "bonjour"],
     )
     missing = runner.invoke(app, ["translate"])
 
@@ -603,7 +744,7 @@ def test_translate_rejects_invalid_request_options(monkeypatch: pytest.MonkeyPat
 
     target_language = runner.invoke(
         app,
-        ["translate", "--llm-caller", "codex_gpt_55", "--target-language", "fr", "bonjour"],
+        ["translate", "--llm-caller", "translator_codex_gpt_55", "--target-language", "fr", "bonjour"],
     )
     llm_caller = runner.invoke(app, ["translate", "--llm-caller", "", "bonjour"])
 
@@ -618,7 +759,7 @@ def test_translate_reports_output_write_failures(monkeypatch: pytest.MonkeyPatch
     service = FakeTranslationService()
     install_fake_service(monkeypatch, service)
 
-    result = runner.invoke(app, ["translate", "--llm-caller", "codex_gpt_55", "--output", str(tmp_path), "bonjour"])
+    result = runner.invoke(app, ["translate", "--llm-caller", "translator_codex_gpt_55", "--output", str(tmp_path), "bonjour"])
 
     assert result.exit_code == 1
     assert "could not write --output" in result.output

@@ -60,16 +60,16 @@ def make_secret_store() -> InMemorySecretStore:
 def make_config() -> CurioConfig:
     return CurioConfig(
         llm_callers={
-            "codex_gpt_55": LlmCallerConfig(
-                name="codex_gpt_55",
+            "translator_codex_gpt_55": LlmCallerConfig(
+                name="translator_codex_gpt_55",
                 provider=ProviderName.CODEX_CLI,
                 model="gpt-5.5",
                 auth_config=CodexCliAuthConfig(require_keyring_credentials_store=False),
                 codex_exec_config=CodexCliExecConfig(executable="codex-test", sandbox="workspace-write"),
                 timeout_seconds=111,
             ),
-            "codex_gpt_54_mini": LlmCallerConfig(
-                name="codex_gpt_54_mini",
+            "translator_codex_gpt_54_mini": LlmCallerConfig(
+                name="translator_codex_gpt_54_mini",
                 provider=ProviderName.CODEX_CLI,
                 model="gpt-5.4-mini",
                 auth_config=CodexCliAuthConfig(require_keyring_credentials_store=False),
@@ -80,8 +80,8 @@ def make_config() -> CurioConfig:
                 ),
                 timeout_seconds=222,
             ),
-            "openai_gpt_54_mini_cold": LlmCallerConfig(
-                name="openai_gpt_54_mini_cold",
+            "translator_openai_gpt_54_mini_cold": LlmCallerConfig(
+                name="translator_openai_gpt_54_mini_cold",
                 provider=ProviderName.OPENAI_API,
                 model="gpt-5.4-mini",
                 auth_config=OpenAiApiAuthConfig(
@@ -109,7 +109,7 @@ def test_llm_caller_factory_builds_codex_client_with_injected_config(tmp_path) -
         codex_output_schema_dir=tmp_path,
     )
 
-    client = factory.create("codex_gpt_55")
+    client = factory.create("translator_codex_gpt_55")
 
     assert isinstance(client, CodexCliClient)
     assert client.runner is runner
@@ -120,7 +120,7 @@ def test_llm_caller_factory_builds_codex_client_with_injected_config(tmp_path) -
     assert client.model == "gpt-5.5"
     assert client.timeout_seconds == 111
 
-    second_client = factory.create("codex_gpt_54_mini")
+    second_client = factory.create("translator_codex_gpt_54_mini")
     assert isinstance(second_client, CodexCliClient)
     assert second_client.model == "gpt-5.4-mini"
     assert second_client.timeout_seconds == 222
@@ -138,7 +138,7 @@ def test_llm_caller_factory_builds_openai_client_with_injected_config(tmp_path) 
         codex_working_directory=tmp_path,
     )
 
-    client = factory.create("openai_gpt_54_mini_cold")
+    client = factory.create("translator_openai_gpt_54_mini_cold")
 
     assert isinstance(client, OpenAiApiClient)
     assert client.auth_config.organization == "org-test"
@@ -156,7 +156,7 @@ def test_build_llm_caller_client_requires_explicit_config_and_dependencies(tmp_p
     secret_store = make_secret_store()
 
     client = build_llm_caller_client(
-        "codex_gpt_55",
+        "translator_codex_gpt_55",
         make_config(),
         secret_store=secret_store,
         codex_runner=runner,
@@ -178,8 +178,8 @@ def test_llm_caller_factory_rejects_missing_or_mismatched_caller_config(tmp_path
         openai_transport=FakeOpenAiTransport(),
         codex_working_directory=tmp_path,
     )
-    with pytest.raises(RuntimeError, match="llm_callers.codex_gpt_55"):
-        factory.create("codex_gpt_55")
+    with pytest.raises(RuntimeError, match="llm_callers.translator_codex_gpt_55"):
+        factory.create("translator_codex_gpt_55")
 
     mismatched_codex = CurioConfig(
         llm_callers={

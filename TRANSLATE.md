@@ -242,9 +242,14 @@ The default policy is:
 
 Model-specific confidence behavior belongs in Curio configuration and prompt policy. It should not add extra public request fields beyond the resolved threshold used for the run.
 
-## V1 Prompt Template
+## V1 Prompt Templates
 
-V1 uses one canonical prompt template for all named callers. It must ask the configured model to perform language classification and conditional translation in a single round trip.
+V1 has built-in translator instruction and user prompt templates. A named
+`translator_*` LLM caller may override either template with
+`llm_callers.NAME.prompt.instructions` or `llm_callers.NAME.prompt.user`.
+Missing template fields fall back independently to the built-in defaults.
+
+Each template must ask the configured model to perform language classification and conditional translation in a single round trip.
 
 The prompt must include:
 
@@ -262,7 +267,10 @@ The prompt must instruct the model to:
 - return exactly one `TranslatedBlock` for each input `Block`
 - preserve input block order
 
-Separate model-specific prompt templates are out of scope for v1. Provider/model overrides may tune the confidence rubric inside the canonical template.
+Prompt templates use Python `str.format` syntax and support only these fields:
+`translation_request_json`, `output_schema_json`, `request_id`,
+`target_language`, and `english_confidence_threshold`. Unknown fields, format
+conversions, and format specs are invalid config.
 
 ## Translation Quality Contract
 
@@ -391,8 +399,7 @@ Future versions may add:
 - local or smaller-model English classifiers before the primary translation model call
 - preflight language detection that avoids LLM calls for clearly English text
 - translation caching
-- model-specific prompt overrides
-- provider-specific prompt tuning based on observed failures
+- prompt evaluation tooling for comparing named translator callers
 - splitting oversized same-artifact requests into deterministic chunks
 
 ## Out Of Scope

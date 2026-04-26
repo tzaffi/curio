@@ -4,7 +4,13 @@ from pathlib import Path
 import pytest
 
 from curio import config as config_module
-from curio.config import ConfigError, CurioConfig, TranslateConfig, load_config
+from curio.config import (
+    ConfigError,
+    CurioConfig,
+    LlmCallerPromptConfig,
+    TranslateConfig,
+    load_config,
+)
 from curio.llm_caller import (
     CodexCliAuthConfig,
     CodexCliAuthMode,
@@ -14,6 +20,10 @@ from curio.llm_caller import (
     OpenAiReasoningEffort,
     OpenAiTextVerbosity,
     ProviderName,
+)
+from curio.translate.adapter import (
+    DEFAULT_TRANSLATION_INSTRUCTIONS,
+    DEFAULT_TRANSLATION_USER_PROMPT_TEMPLATE,
 )
 
 
@@ -25,6 +35,13 @@ def write_config(path: Path, payload: object) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def assert_default_translation_prompt_config(prompt_config: LlmCallerPromptConfig | None) -> None:
+    assert prompt_config == LlmCallerPromptConfig(
+        instructions=DEFAULT_TRANSLATION_INSTRUCTIONS,
+        user=DEFAULT_TRANSLATION_USER_PROMPT_TEMPLATE,
+    )
+
+
 def test_config_path_points_to_current_working_directory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
 
@@ -33,9 +50,9 @@ def test_config_path_points_to_current_working_directory(monkeypatch: pytest.Mon
 
 def test_checked_in_codex_example_config_parses() -> None:
     config = load_config(repo_root() / "config.example.codex_cli.json")
-    caller_config = config.llm_caller_config("codex_gpt_55")
+    caller_config = config.llm_caller_config("translator_codex_gpt_55")
 
-    assert config.translate_config == TranslateConfig(llm_caller="codex_gpt_54_mini")
+    assert config.translate_config == TranslateConfig(llm_caller="translator_codex_gpt_54_mini")
     assert caller_config.provider == ProviderName.CODEX_CLI
     assert caller_config.model == "gpt-5.5"
     assert caller_config.timeout_seconds == 300
@@ -50,18 +67,20 @@ def test_checked_in_codex_example_config_parses() -> None:
     assert caller_config.codex_exec_config.json_events is True
     assert caller_config.codex_exec_config.model_reasoning_effort == CodexCliReasoningEffort.LOW
     assert caller_config.codex_exec_config.model_verbosity is None
+    assert_default_translation_prompt_config(caller_config.prompt_config)
 
-    mini_config = config.llm_caller_config("codex_gpt_54_mini")
+    mini_config = config.llm_caller_config("translator_codex_gpt_54_mini")
     assert mini_config.model == "gpt-5.4-mini"
     assert mini_config.codex_exec_config is not None
     assert mini_config.codex_exec_config.model_verbosity == CodexCliVerbosity.LOW
+    assert_default_translation_prompt_config(mini_config.prompt_config)
 
 
 def test_checked_in_openai_example_config_parses() -> None:
     config = load_config(repo_root() / "config.example.openai_api.json")
-    caller_config = config.llm_caller_config("openai_gpt_54_mini_cold")
+    caller_config = config.llm_caller_config("translator_openai_gpt_54_mini_cold")
 
-    assert config.translate_config == TranslateConfig(llm_caller="openai_gpt_54_mini_cold")
+    assert config.translate_config == TranslateConfig(llm_caller="translator_openai_gpt_54_mini_cold")
     assert caller_config.provider == ProviderName.OPENAI_API
     assert caller_config.model == "gpt-5.4-mini"
     assert caller_config.timeout_seconds == 300
@@ -76,6 +95,10 @@ def test_checked_in_openai_example_config_parses() -> None:
     assert caller_config.openai_responses_config.reasoning_effort == OpenAiReasoningEffort.LOW
     assert caller_config.openai_responses_config.max_output_tokens is None
     assert caller_config.openai_responses_config.text_verbosity == OpenAiTextVerbosity.LOW
+    assert_default_translation_prompt_config(caller_config.prompt_config)
+
+    gpt55_config = config.llm_caller_config("translator_openai_gpt_55")
+    assert_default_translation_prompt_config(gpt55_config.prompt_config)
 
 
 def test_load_config_requires_file_and_json_object(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -104,8 +127,8 @@ def test_load_config_requires_llm_callers_and_selected_caller(tmp_path: Path) ->
         load_config(config_path)
 
     config = load_config(repo_root() / "config.example.openai_api.json")
-    with pytest.raises(ConfigError, match="llm_callers.codex_gpt_55"):
-        config.llm_caller_config("codex_gpt_55")
+    with pytest.raises(ConfigError, match="llm_callers.translator_codex_gpt_55"):
+        config.llm_caller_config("translator_codex_gpt_55")
 
 
 def test_load_config_parses_optional_translate_config(tmp_path: Path) -> None:
@@ -142,6 +165,56 @@ def test_load_config_rejects_invalid_translate_config(tmp_path: Path) -> None:
         CurioConfig(llm_callers={}, translate_config="bad")
 
 
+def test_load_config_parses_llm_caller_prompt_config(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    payload = json.loads((repo_root() / "config.example.codex_cli.json").read_text(encoding="utf-8"))
+    payload["llm_callers"]["translator_codex_gpt_55"]["prompt"] = {
+        "instructions": "Return {target_language} JSON for {request_id}",
+        "user": "Translate {translation_request_json} with {output_schema_json} at {english_confidence_threshold}",
+    }
+    payload["llm_callers"]["translator_codex_gpt_54_mini"]["prompt"] = {
+        "instructions": "Only instructions {request_id}",
+    }
+    write_config(config_path, payload)
+
+    config = load_config(config_path)
+
+    assert config.llm_caller_config("translator_codex_gpt_55").prompt_config == LlmCallerPromptConfig(
+        instructions="Return {target_language} JSON for {request_id}",
+        user="Translate {translation_request_json} with {output_schema_json} at {english_confidence_threshold}",
+    )
+    assert config.llm_caller_config("translator_codex_gpt_54_mini").prompt_config == LlmCallerPromptConfig(
+        instructions="Only instructions {request_id}",
+    )
+
+
+def test_load_config_rejects_invalid_llm_caller_prompt_config(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    payload = json.loads((repo_root() / "config.example.codex_cli.json").read_text(encoding="utf-8"))
+
+    payload["llm_callers"]["translator_codex_gpt_55"]["prompt"] = "bad"
+    write_config(config_path, payload)
+    with pytest.raises(ConfigError, match="prompt"):
+        load_config(config_path)
+
+    payload["llm_callers"]["translator_codex_gpt_55"]["prompt"] = {"instructions": ""}
+    write_config(config_path, payload)
+    with pytest.raises(ConfigError, match="prompt.instructions"):
+        load_config(config_path)
+
+    invalid_templates = (
+        ("{unknown}", "unsupported placeholder"),
+        ("{request_id!r}", "format conversions"),
+        ("{request_id:>10}", "format specs"),
+        ("{", "valid Python format template"),
+    )
+    for template, message in invalid_templates:
+        payload["llm_callers"]["translator_codex_gpt_55"]["prompt"] = {"user": template}
+        write_config(config_path, payload)
+        with pytest.raises(ConfigError, match=message):
+            load_config(config_path)
+
+
 def test_load_config_rejects_invalid_llm_caller_blocks(tmp_path: Path) -> None:
     config_path = tmp_path / "config.json"
     write_config(config_path, {"llm_callers": "not-an-object"})
@@ -160,7 +233,7 @@ def test_load_config_rejects_invalid_llm_caller_blocks(tmp_path: Path) -> None:
         config_path,
         {
             "llm_callers": {
-                "codex_gpt_55": {
+                "translator_codex_gpt_55": {
                     "provider": "codex_cli",
                     "model": "gpt-5.5",
                     "timeout_seconds": 300,
@@ -174,26 +247,26 @@ def test_load_config_rejects_invalid_llm_caller_blocks(tmp_path: Path) -> None:
             }
         },
     )
-    with pytest.raises(ConfigError, match="llm_callers.codex_gpt_55.exec"):
+    with pytest.raises(ConfigError, match="llm_callers.translator_codex_gpt_55.exec"):
         load_config(config_path)
 
 
 def test_load_config_rejects_invalid_codex_exec_fields(tmp_path: Path) -> None:
     config_path = tmp_path / "config.json"
     payload = json.loads((repo_root() / "config.example.codex_cli.json").read_text(encoding="utf-8"))
-    payload["llm_callers"]["codex_gpt_55"]["exec"]["extra_config"] = "bad"
+    payload["llm_callers"]["translator_codex_gpt_55"]["exec"]["extra_config"] = "bad"
     write_config(config_path, payload)
 
     with pytest.raises(ConfigError, match="extra_config"):
         load_config(config_path)
 
-    payload["llm_callers"]["codex_gpt_55"]["exec"]["extra_config"] = [""]
+    payload["llm_callers"]["translator_codex_gpt_55"]["exec"]["extra_config"] = [""]
     write_config(config_path, payload)
     with pytest.raises(ConfigError, match="extra_config item"):
         load_config(config_path)
 
-    payload["llm_callers"]["codex_gpt_55"]["exec"]["extra_config"] = []
-    payload["llm_callers"]["codex_gpt_55"]["exec"]["ephemeral"] = "true"
+    payload["llm_callers"]["translator_codex_gpt_55"]["exec"]["extra_config"] = []
+    payload["llm_callers"]["translator_codex_gpt_55"]["exec"]["ephemeral"] = "true"
     write_config(config_path, payload)
     with pytest.raises(ConfigError, match="ephemeral"):
         load_config(config_path)
@@ -202,18 +275,18 @@ def test_load_config_rejects_invalid_codex_exec_fields(tmp_path: Path) -> None:
 def test_load_config_rejects_invalid_named_caller_runtime_fields(tmp_path: Path) -> None:
     config_path = tmp_path / "config.json"
     payload = json.loads((repo_root() / "config.example.openai_api.json").read_text(encoding="utf-8"))
-    payload["llm_callers"]["openai_gpt_54_mini_cold"]["timeout_seconds"] = 0
+    payload["llm_callers"]["translator_openai_gpt_54_mini_cold"]["timeout_seconds"] = 0
     write_config(config_path, payload)
     with pytest.raises(ConfigError, match="timeout_seconds"):
         load_config(config_path)
 
     payload = json.loads((repo_root() / "config.example.openai_api.json").read_text(encoding="utf-8"))
-    payload["llm_callers"]["openai_gpt_54_mini_cold"]["responses"]["temperature"] = "cold"
+    payload["llm_callers"]["translator_openai_gpt_54_mini_cold"]["responses"]["temperature"] = "cold"
     write_config(config_path, payload)
     with pytest.raises(ConfigError, match="temperature"):
         load_config(config_path)
 
-    payload["llm_callers"]["openai_gpt_54_mini_cold"]["responses"]["temperature"] = 3
+    payload["llm_callers"]["translator_openai_gpt_54_mini_cold"]["responses"]["temperature"] = 3
     write_config(config_path, payload)
     with pytest.raises(ValueError, match="temperature"):
         load_config(config_path)

@@ -4,6 +4,7 @@ from typing import cast
 import pytest
 
 import curio.translate as translate
+from curio.config import LlmCallerPromptConfig
 from curio.llm_caller import (
     LlmOutput,
     LlmRequest,
@@ -54,7 +55,7 @@ def make_request() -> TranslationRequest:
     return TranslationRequest(
         request_id="translate-test",
         blocks=[make_block()],
-        llm_caller="codex_gpt_55",
+        llm_caller="translator_codex_gpt_55",
     )
 
 
@@ -130,7 +131,7 @@ def test_translation_request_serializes_to_schema_payload() -> None:
 
     payload = request.to_json()
 
-    assert request.llm_caller == "codex_gpt_55"
+    assert request.llm_caller == "translator_codex_gpt_55"
     assert payload["translation_request_version"] == "curio-translation-request.v1"
     assert payload["blocks"][0]["context"] == {"artifact_kind": "tweet_json"}
     validate_json(payload, SchemaName.TRANSLATION_REQUEST)
@@ -453,6 +454,36 @@ def test_translation_service_calls_injected_llm_client_and_assembles_response() 
         llm=LlmSummary(provider="codex_cli", model="gpt-test", usage=make_usage()),
         warnings=["provider warning"],
     )
+
+
+def test_translation_service_passes_prompt_config_to_adapter() -> None:
+    client = RecordingLlmClient(
+        make_llm_response(
+            {
+                "request_id": "translate-test",
+                "blocks": [
+                    {
+                        "block_id": 1,
+                        "name": "tweet_text",
+                        "detected_language": "ja",
+                        "english_confidence_estimate": 0.01,
+                        "translation_required": True,
+                        "translated_text": "Today we are releasing a new model.",
+                        "warnings": [],
+                    }
+                ],
+            }
+        )
+    )
+    service = TranslationService(
+        llm_client=client,
+        prompt_config=LlmCallerPromptConfig(instructions="Service prompt {request_id}", user="User {target_language}"),
+    )
+
+    service.translate(make_request())
+
+    assert client.requests[0].instructions == "Service prompt translate-test"
+    assert client.requests[0].input[0].content[0].text == "User en"
 
 
 def test_translation_service_propagates_validation_errors() -> None:

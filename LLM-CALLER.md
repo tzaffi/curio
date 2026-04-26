@@ -79,8 +79,28 @@ V1 config uses named `llm_callers` plus workflow defaults such as
 - `auth`
 - `timeout_seconds`
 - provider-specific tuning
+- optional translator prompt overrides
 
-Multiple entries may use the same provider with different models or tuning, such as `codex_gpt_55`, `codex_gpt_54_mini`, and `openai_gpt_54_mini_cold`.
+Multiple entries may use the same provider with different models or tuning, such as `translator_codex_gpt_55`, `translator_codex_gpt_54_mini`, and `translator_openai_gpt_54_mini_cold`.
+
+Translator prompt overrides live under the selected named caller:
+
+```json
+{
+  "llm_callers": {
+    "translator_codex_gpt_54_mini": {
+      "prompt": {
+        "instructions": "Return only JSON for {request_id}.",
+        "user": "Request:\n{translation_request_json}\n\nSchema:\n{output_schema_json}"
+      }
+    }
+  }
+}
+```
+
+The supported template placeholders are `translation_request_json`,
+`output_schema_json`, `request_id`, `target_language`, and
+`english_confidence_threshold`.
 
 Translation caller selection is resolved in this order:
 
@@ -188,7 +208,7 @@ The stable JSON representation of an LLM request is:
   ],
   "metadata": {
     "source": "curio.translate",
-    "llm_caller": "codex_gpt_54_mini"
+    "llm_caller": "translator_codex_gpt_54_mini"
   }
 }
 ```

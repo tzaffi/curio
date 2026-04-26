@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+from curio.config import LlmCallerPromptConfig
 from curio.llm_caller import LlmClient
 from curio.translate.adapter import build_translation_llm_request
 from curio.translate.models import (
@@ -13,9 +14,10 @@ from curio.translate.validation import translated_blocks_from_llm_response
 @dataclass(frozen=True, slots=True)
 class TranslationService:
     llm_client: LlmClient
+    prompt_config: LlmCallerPromptConfig | None = None
 
     def translate(self, request: TranslationRequest) -> TranslationResponse:
-        llm_request = build_translation_llm_request(request)
+        llm_request = build_translation_llm_request(request, self.prompt_config)
         llm_response = self.llm_client.complete(llm_request)
         blocks = translated_blocks_from_llm_response(request, llm_response)
         return TranslationResponse(

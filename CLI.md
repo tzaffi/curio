@@ -120,7 +120,7 @@ V1 flags:
 - `--english-confidence-threshold FLOAT`
   Minimum model confidence for treating a block as English without translation. Defaults to `0.90`.
 - `--llm-caller NAME`
-  Override the named LLM caller for this run, such as `codex_gpt_55` or `openai_gpt_54_mini_cold`.
+  Override the named LLM caller for this run, such as `translator_codex_gpt_55` or `translator_openai_gpt_54_mini_cold`.
 
 LLM caller resolution precedence is CLI `--llm-caller`, then structured JSON
 `llm_caller`, then `config.json` `translate.llm_caller`. If none is available,

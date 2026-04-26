@@ -69,9 +69,12 @@ def _build_translation_service(
     config_path: Path | None,
     config: CurioConfig | None = None,
 ) -> TranslationService:
-    if config is None:
-        return TranslationService(llm_client=_build_llm_caller_client(llm_caller, config_path))
-    return TranslationService(llm_client=_build_llm_caller_client(llm_caller, config_path, config=config))
+    curio_config = load_config(config_path) if config is None else config
+    caller_config = curio_config.llm_caller_config(llm_caller)
+    return TranslationService(
+        llm_client=_build_llm_caller_client(llm_caller, config_path, config=curio_config),
+        prompt_config=caller_config.prompt_config,
+    )
 
 
 def _fail_usage(message: str) -> NoReturn:
@@ -263,13 +266,13 @@ def _request_with_llm_caller(request: TranslationRequest, llm_caller: str) -> Tr
 def _resolve_translation_request_llm_caller(
     request: TranslationRequest,
     config_path: Path | None,
-) -> tuple[TranslationRequest, CurioConfig | None]:
-    if request.llm_caller is not None:
-        return request, None
+) -> tuple[TranslationRequest, CurioConfig]:
     try:
         config = load_config(config_path)
     except ConfigError as exc:
         _fail_runtime(str(exc))
+    if request.llm_caller is not None:
+        return request, config
     if config.translate_config.llm_caller is None:
         _fail_usage(LLM_CALLER_REQUIRED_MESSAGE)
     return _request_with_llm_caller(request, config.translate_config.llm_caller), config
@@ -320,12 +323,12 @@ def translate(
     )
     request, config = _resolve_translation_request_llm_caller(request, config_path)
     try:
-        if config is None:
-            response = _build_translation_service(_request_llm_caller(request), config_path).translate(request)
-        else:
-            response = _build_translation_service(_request_llm_caller(request), config_path, config=config).translate(
-                request
-            )
+        llm_caller_name = _request_llm_caller(request)
+        response = _build_translation_service(
+            llm_caller_name,
+            config_path,
+            config=config,
+        ).translate(request)
     except (ConfigError, LlmCallerError, TranslationError) as exc:
         _fail_runtime(str(exc))
 
