@@ -2,23 +2,25 @@ from collections.abc import Mapping
 
 import pytest
 
-from curio.config import CurioConfig, ProviderConfig
+from curio.config import CurioConfig, LlmCallerConfig
 from curio.llm_caller import (
     CodexCliAuthConfig,
     CodexCliClient,
     CodexCliCommand,
     CodexCliExecConfig,
+    CodexCliReasoningEffort,
     CodexCliRunResult,
     InMemorySecretStore,
+    LlmCallerFactory,
     LlmConfigurationError,
     OpenAiApiAuthConfig,
     OpenAiApiCallResult,
     OpenAiApiClient,
+    OpenAiResponsesConfig,
     ProviderCallTiming,
-    ProviderClientFactory,
     ProviderName,
     SecretRef,
-    build_provider_client,
+    build_llm_caller_client,
 )
 
 
@@ -57,27 +59,48 @@ def make_secret_store() -> InMemorySecretStore:
 
 def make_config() -> CurioConfig:
     return CurioConfig(
-        providers={
-            ProviderName.CODEX_CLI: ProviderConfig(
+        llm_callers={
+            "codex_gpt_55": LlmCallerConfig(
+                name="codex_gpt_55",
+                provider=ProviderName.CODEX_CLI,
+                model="gpt-5.5",
                 auth_config=CodexCliAuthConfig(require_keyring_credentials_store=False),
                 codex_exec_config=CodexCliExecConfig(executable="codex-test", sandbox="workspace-write"),
+                timeout_seconds=111,
             ),
-            ProviderName.OPENAI_API: ProviderConfig(
+            "codex_gpt_54_mini": LlmCallerConfig(
+                name="codex_gpt_54_mini",
+                provider=ProviderName.CODEX_CLI,
+                model="gpt-5.4-mini",
+                auth_config=CodexCliAuthConfig(require_keyring_credentials_store=False),
+                codex_exec_config=CodexCliExecConfig(
+                    executable="codex-test",
+                    sandbox="read-only",
+                    model_reasoning_effort="minimal",
+                ),
+                timeout_seconds=222,
+            ),
+            "openai_gpt_54_mini_cold": LlmCallerConfig(
+                name="openai_gpt_54_mini_cold",
+                provider=ProviderName.OPENAI_API,
+                model="gpt-5.4-mini",
                 auth_config=OpenAiApiAuthConfig(
                     api_key_ref=SecretRef(service="curio/openai-api", account="default-api-key"),
                     organization="org-test",
                     project="proj-test",
-                )
+                ),
+                timeout_seconds=333,
+                openai_responses_config=OpenAiResponsesConfig(temperature=0.2),
             ),
         }
     )
 
 
-def test_provider_client_factory_builds_codex_client_with_injected_config(tmp_path) -> None:
+def test_llm_caller_factory_builds_codex_client_with_injected_config(tmp_path) -> None:
     runner = FakeCodexRunner()
     transport = FakeOpenAiTransport()
     secret_store = make_secret_store()
-    factory = ProviderClientFactory(
+    factory = LlmCallerFactory(
         config=make_config(),
         secret_store=secret_store,
         codex_runner=runner,
@@ -86,7 +109,7 @@ def test_provider_client_factory_builds_codex_client_with_injected_config(tmp_pa
         codex_output_schema_dir=tmp_path,
     )
 
-    client = factory.create(ProviderName.CODEX_CLI)
+    client = factory.create("codex_gpt_55")
 
     assert isinstance(client, CodexCliClient)
     assert client.runner is runner
@@ -94,12 +117,20 @@ def test_provider_client_factory_builds_codex_client_with_injected_config(tmp_pa
     assert client.auth_config.require_keyring_credentials_store is False
     assert client.working_directory == tmp_path
     assert client.output_schema_dir == tmp_path
+    assert client.model == "gpt-5.5"
+    assert client.timeout_seconds == 111
+
+    second_client = factory.create("codex_gpt_54_mini")
+    assert isinstance(second_client, CodexCliClient)
+    assert second_client.model == "gpt-5.4-mini"
+    assert second_client.timeout_seconds == 222
+    assert second_client.exec_config.model_reasoning_effort == CodexCliReasoningEffort.MINIMAL
 
 
-def test_provider_client_factory_builds_openai_client_with_injected_config(tmp_path) -> None:
+def test_llm_caller_factory_builds_openai_client_with_injected_config(tmp_path) -> None:
     transport = FakeOpenAiTransport()
     secret_store = make_secret_store()
-    factory = ProviderClientFactory(
+    factory = LlmCallerFactory(
         config=make_config(),
         secret_store=secret_store,
         codex_runner=FakeCodexRunner(),
@@ -107,22 +138,25 @@ def test_provider_client_factory_builds_openai_client_with_injected_config(tmp_p
         codex_working_directory=tmp_path,
     )
 
-    client = factory.create("openai_api")
+    client = factory.create("openai_gpt_54_mini_cold")
 
     assert isinstance(client, OpenAiApiClient)
     assert client.auth_config.organization == "org-test"
     assert client.auth_config.project == "proj-test"
     assert client.transport is transport
     assert client.secret_store is secret_store
+    assert client.model == "gpt-5.4-mini"
+    assert client.timeout_seconds == 333
+    assert client.responses_config.temperature == 0.2
 
 
-def test_build_provider_client_requires_explicit_config_and_dependencies(tmp_path) -> None:
+def test_build_llm_caller_client_requires_explicit_config_and_dependencies(tmp_path) -> None:
     runner = FakeCodexRunner()
     transport = FakeOpenAiTransport()
     secret_store = make_secret_store()
 
-    client = build_provider_client(
-        "codex_cli",
+    client = build_llm_caller_client(
+        "codex_gpt_55",
         make_config(),
         secret_store=secret_store,
         codex_runner=runner,
@@ -135,55 +169,75 @@ def test_build_provider_client_requires_explicit_config_and_dependencies(tmp_pat
     assert client.working_directory == tmp_path
 
 
-def test_provider_client_factory_rejects_missing_or_mismatched_provider_config(tmp_path) -> None:
-    empty_config = CurioConfig(providers={})
-    factory = ProviderClientFactory(
+def test_llm_caller_factory_rejects_missing_or_mismatched_caller_config(tmp_path) -> None:
+    empty_config = CurioConfig(llm_callers={})
+    factory = LlmCallerFactory(
         config=empty_config,
         secret_store=make_secret_store(),
         codex_runner=FakeCodexRunner(),
         openai_transport=FakeOpenAiTransport(),
         codex_working_directory=tmp_path,
     )
-    with pytest.raises(RuntimeError, match="providers.codex_cli"):
-        factory.create("codex_cli")
+    with pytest.raises(RuntimeError, match="llm_callers.codex_gpt_55"):
+        factory.create("codex_gpt_55")
 
     mismatched_codex = CurioConfig(
-        providers={
-            ProviderName.CODEX_CLI: ProviderConfig(
+        llm_callers={
+            "bad_codex": LlmCallerConfig(
+                name="bad_codex",
+                provider=ProviderName.CODEX_CLI,
+                model="gpt-test",
                 auth_config=OpenAiApiAuthConfig(),
                 codex_exec_config=CodexCliExecConfig(),
+                timeout_seconds=300,
             )
         }
     )
     with pytest.raises(LlmConfigurationError, match="codex_cli auth config is invalid"):
-        ProviderClientFactory(
+        LlmCallerFactory(
             config=mismatched_codex,
             secret_store=make_secret_store(),
             codex_runner=FakeCodexRunner(),
             openai_transport=FakeOpenAiTransport(),
             codex_working_directory=tmp_path,
-        ).create("codex_cli")
+        ).create("bad_codex")
 
     missing_codex_exec = CurioConfig(
-        providers={ProviderName.CODEX_CLI: ProviderConfig(auth_config=CodexCliAuthConfig())}
+        llm_callers={
+            "bad_codex": LlmCallerConfig(
+                name="bad_codex",
+                provider=ProviderName.CODEX_CLI,
+                model="gpt-test",
+                auth_config=CodexCliAuthConfig(),
+                timeout_seconds=300,
+            )
+        }
     )
     with pytest.raises(LlmConfigurationError, match="codex_cli exec config is required"):
-        ProviderClientFactory(
+        LlmCallerFactory(
             config=missing_codex_exec,
             secret_store=make_secret_store(),
             codex_runner=FakeCodexRunner(),
             openai_transport=FakeOpenAiTransport(),
             codex_working_directory=tmp_path,
-        ).create("codex_cli")
+        ).create("bad_codex")
 
     mismatched_openai = CurioConfig(
-        providers={ProviderName.OPENAI_API: ProviderConfig(auth_config=CodexCliAuthConfig())}
+        llm_callers={
+            "bad_openai": LlmCallerConfig(
+                name="bad_openai",
+                provider=ProviderName.OPENAI_API,
+                model="gpt-test",
+                auth_config=CodexCliAuthConfig(),
+                timeout_seconds=300,
+            )
+        }
     )
     with pytest.raises(LlmConfigurationError, match="openai_api auth config is invalid"):
-        ProviderClientFactory(
+        LlmCallerFactory(
             config=mismatched_openai,
             secret_store=make_secret_store(),
             codex_runner=FakeCodexRunner(),
             openai_transport=FakeOpenAiTransport(),
             codex_working_directory=tmp_path,
-        ).create("openai_api")
+        ).create("bad_openai")

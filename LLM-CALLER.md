@@ -67,18 +67,38 @@ The public boundary should include:
 
 Curio workflows should accept an `LlmClient` dependency. They should not import provider SDKs, spawn provider CLIs, read provider auth files, or parse provider raw responses directly.
 
-`LlmClient` is the workflow-facing abstraction. Provider choice happens at startup, configuration loading, or CLI parsing time. The selected provider-specific client is then injected into the workflow service. V1 must not silently route to a different provider when the selected provider fails.
+`LlmClient` is the workflow-facing abstraction. Named LLM caller choice happens at startup, configuration loading, or CLI parsing time. The selected provider-specific client is then injected into the workflow service. V1 must not silently route to a different caller when the selected caller fails.
 
-## Provider Names
+## Named Caller Configs
 
-V1 provider identifiers are:
+V1 config uses named `llm_callers` plus workflow defaults such as
+`translate.llm_caller`. Each named caller entry owns:
+
+- `provider`: `codex_cli` or `openai_api`
+- `model`
+- `auth`
+- `timeout_seconds`
+- provider-specific tuning
+
+Multiple entries may use the same provider with different models or tuning, such as `codex_gpt_55`, `codex_gpt_54_mini`, and `openai_gpt_54_mini_cold`.
+
+Translation caller selection is resolved in this order:
+
+1. CLI `--llm-caller`
+2. structured JSON `llm_caller`
+3. `config.json` `translate.llm_caller`
+
+The resolved name is stored back onto the translation request before the
+translation service builds the LLM request metadata.
+
+Provider identifiers are:
 
 - `codex_cli`
   Local subprocess calls to `codex exec`.
 - `openai_api`
   Direct OpenAI API calls.
 
-V1 must fully specify and unit-test both providers. Codex CLI is the default provider for normal Curio runs. Future providers may be added by implementing `LlmClient`, but they must declare capabilities explicitly before Curio workflows can depend on them.
+V1 must fully specify and unit-test both providers. Future providers may be added by implementing `LlmClient`, but they must declare capabilities explicitly before Curio workflows can depend on them.
 
 ## Capabilities
 
@@ -140,7 +160,6 @@ The stable JSON representation of an LLM request is:
   "llm_request_version": "curio-llm-request.v1",
   "request_id": "translate-20260424-000001",
   "workflow": "translate",
-  "model": "gpt-5.3-codex",
   "instructions": "Return only JSON that satisfies the provided schema.",
   "input": [
     {
@@ -167,9 +186,9 @@ The stable JSON representation of an LLM request is:
     "text_generation",
     "json_schema_output"
   ],
-  "timeout_seconds": 300,
   "metadata": {
-    "source": "curio.translate"
+    "source": "curio.translate",
+    "llm_caller": "codex_gpt_54_mini"
   }
 }
 ```
@@ -182,8 +201,6 @@ Fields:
   Operator-visible identifier for logs and diagnostics.
 - `workflow`
   Curio workflow name, such as `translate` or `curate`.
-- `model`
-  Provider model name. If omitted at the Python layer, configuration may provide a default before the request is serialized.
 - `instructions`
   System-level instruction text owned by the workflow.
 - `input`
@@ -192,8 +209,6 @@ Fields:
   Requested output format. V1 requires `json_schema` for machine-read workflows. The schema should describe the model-emitted payload, not provider usage metadata that Curio adds after the call.
 - `required_capabilities`
   Capabilities that must be supported before calling the provider.
-- `timeout_seconds`
-  Wall-clock timeout for the provider call.
 - `metadata`
   Small diagnostic object. It must not contain secrets or large source text duplicated from `input`.
 
@@ -302,7 +317,7 @@ Provider clients should be small and boring. Most workflow logic belongs above t
 
 ## `openai_api` Client
 
-`OpenAiApiClient` is a first-class v1 provider client, but it is not the default provider for normal Curio runs.
+`OpenAiApiClient` is a first-class v1 provider client. It is selected only through an explicit named caller config.
 
 It should:
 

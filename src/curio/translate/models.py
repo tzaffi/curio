@@ -137,9 +137,7 @@ class TranslationRequest:
     blocks: Sequence[Block]
     target_language: str = DEFAULT_TARGET_LANGUAGE
     english_confidence_threshold: float = DEFAULT_ENGLISH_CONFIDENCE_THRESHOLD
-    provider: ProviderName | str | None = None
-    model: str | None = None
-    timeout_seconds: int | None = None
+    llm_caller: str | None = None
     translation_request_version: str = field(default=TRANSLATION_REQUEST_VERSION, init=False)
 
     def __post_init__(self) -> None:
@@ -153,20 +151,15 @@ class TranslationRequest:
         block_ids = tuple(block.block_id for block in blocks)
         if len(block_ids) != len(set(block_ids)):
             raise TranslationRequestError("block_id values must be unique")
-        if self.provider is not None:
-            object.__setattr__(self, "provider", ProviderName(self.provider))
-        if self.model is not None:
-            _require_string(self.model, "model")
-        if self.timeout_seconds is not None:
-            _require_positive_int(self.timeout_seconds, "timeout_seconds")
+        if self.llm_caller is not None:
+            _require_string(self.llm_caller, "llm_caller")
         object.__setattr__(self, "blocks", blocks)
 
     @classmethod
     def from_json(cls, value: object) -> "TranslationRequest":
         validate_json(value, SchemaName.TRANSLATION_REQUEST)
         payload = _require_mapping(value, "translation request")
-        provider = payload.get("provider")
-        timeout_seconds = payload.get("timeout_seconds")
+        llm_caller = payload.get("llm_caller")
         return cls(
             request_id=_require_string(_require_field(payload, "request_id"), "request_id"),
             target_language=_require_string(_require_field(payload, "target_language"), "target_language"),
@@ -175,24 +168,17 @@ class TranslationRequest:
                 "english_confidence_threshold",
             ),
             blocks=[Block.from_json(block) for block in _require_list(_require_field(payload, "blocks"), "blocks")],
-            provider=None if provider is None else _require_string(provider, "provider"),
-            model=cast(str | None, payload.get("model")),
-            timeout_seconds=None
-            if timeout_seconds is None
-            else _require_positive_int(timeout_seconds, "timeout_seconds"),
+            llm_caller=None if llm_caller is None else _require_string(llm_caller, "llm_caller"),
         )
 
     def to_json(self) -> JsonObject:
-        provider = None if self.provider is None else cast(ProviderName, self.provider)
         return {
             "translation_request_version": self.translation_request_version,
             "request_id": self.request_id,
             "target_language": self.target_language,
             "english_confidence_threshold": self.english_confidence_threshold,
             "blocks": [block.to_json() for block in self.blocks],
-            "provider": None if provider is None else provider.value,
-            "model": self.model,
-            "timeout_seconds": self.timeout_seconds,
+            "llm_caller": self.llm_caller,
         }
 
 

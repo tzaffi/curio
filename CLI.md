@@ -103,7 +103,7 @@ If no input mode is provided and stdin is not piped, the command must fail with 
 
 ### Core Flags
 
-Required v1 flags:
+V1 flags:
 
 - `--input-file PATH`
   Read one raw text block from a UTF-8 text file.
@@ -119,12 +119,12 @@ Required v1 flags:
   Target language. V1 accepts only `en`.
 - `--english-confidence-threshold FLOAT`
   Minimum model confidence for treating a block as English without translation. Defaults to `0.90`.
-- `--provider PROVIDER`
-  LLM provider override, such as `codex_cli` or `openai_api`. Defaults to `codex_cli`.
-- `--model MODEL`
-  Provider model override.
-- `--timeout-seconds SECONDS`
-  Provider-call wall-clock timeout. Defaults to `300`.
+- `--llm-caller NAME`
+  Override the named LLM caller for this run, such as `codex_gpt_55` or `openai_gpt_54_mini_cold`.
+
+LLM caller resolution precedence is CLI `--llm-caller`, then structured JSON
+`llm_caller`, then `config.json` `translate.llm_caller`. If none is available,
+the command must fail with a usage error.
 
 JSON formatting flags such as `--pretty` and `--compact` are out of scope for v1.
 

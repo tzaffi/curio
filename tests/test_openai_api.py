@@ -13,7 +13,6 @@ from curio.llm_caller import (
     JsonSchemaOutput,
     LlmAuthError,
     LlmCapability,
-    LlmConfigurationError,
     LlmInvalidOutputError,
     LlmMessage,
     LlmRejectedRequestError,
@@ -23,6 +22,9 @@ from curio.llm_caller import (
     OpenAiApiAuthConfig,
     OpenAiApiCallResult,
     OpenAiApiClient,
+    OpenAiReasoningEffort,
+    OpenAiResponsesConfig,
+    OpenAiTextVerbosity,
     ProviderCallTiming,
     ProviderName,
     SdkOpenAiApiTransport,
@@ -50,7 +52,6 @@ def make_auth_config() -> OpenAiApiAuthConfig:
 
 
 def make_request(
-    model: str | None = "gpt-test",
     *,
     required_capabilities: list[LlmCapability | str] | None = None,
     output_schema: dict[str, object] | None = None,
@@ -58,7 +59,6 @@ def make_request(
     return LlmRequest(
         request_id="translate-test",
         workflow="translate",
-        model=model,
         instructions="Return translated blocks as JSON.",
         input=[
             LlmMessage(role="system", content=[TextContentPart(text="System context.")]),
@@ -71,7 +71,6 @@ def make_request(
         required_capabilities=["text_generation", "json_schema_output"]
         if required_capabilities is None
         else required_capabilities,
-        timeout_seconds=120,
         metadata={},
     )
 
@@ -139,9 +138,38 @@ class FakeOpenAiTransport:
         return OpenAiApiCallResult(payload=self.payload, timing=make_timing())
 
 
-def test_build_openai_response_request_maps_llm_request_without_secret() -> None:
-    payload = build_openai_response_request(make_request())
+def make_client(
+    transport: FakeOpenAiTransport,
+    *,
+    model: str = "gpt-test",
+    timeout_seconds: int = 120,
+    responses_config: OpenAiResponsesConfig | None = None,
+) -> OpenAiApiClient:
+    return OpenAiApiClient(
+        transport=transport,
+        auth_config=make_auth_config(),
+        secret_store=make_secret_store(),
+        model=model,
+        timeout_seconds=timeout_seconds,
+        responses_config=responses_config,
+    )
 
+
+def test_build_openai_response_request_maps_llm_request_without_secret() -> None:
+    responses_config = OpenAiResponsesConfig(
+        temperature=0,
+        reasoning_effort=OpenAiReasoningEffort.LOW,
+        max_output_tokens=2000,
+        text_verbosity="low",
+    )
+    payload = build_openai_response_request(
+        make_request(),
+        model="gpt-test",
+        responses_config=responses_config,
+    )
+
+    assert responses_config.reasoning_effort == OpenAiReasoningEffort.LOW
+    assert responses_config.text_verbosity == OpenAiTextVerbosity.LOW
     assert payload == {
         "model": "gpt-test",
         "instructions": "Return translated blocks as JSON.",
@@ -164,25 +192,72 @@ def test_build_openai_response_request_maps_llm_request_without_secret() -> None
                 "name": "curio_translation_model_output",
                 "schema": {"type": "object"},
                 "strict": True,
-            }
+            },
+            "verbosity": "low",
         },
         "metadata": {
             "curio_request_id": "translate-test",
             "curio_workflow": "translate",
         },
+        "temperature": 0,
+        "max_output_tokens": 2000,
+        "reasoning": {"effort": "low"},
     }
     assert "sk-test-secret" not in str(payload)
 
 
-def test_build_openai_response_request_requires_model() -> None:
-    with pytest.raises(LlmConfigurationError, match="model is required"):
-        build_openai_response_request(make_request(model=None))
+def test_build_openai_response_request_omits_empty_tuning_values() -> None:
+    payload = build_openai_response_request(make_request(), model="gpt-test", responses_config=OpenAiResponsesConfig())
+
+    assert payload["text"] == {
+        "format": {
+            "type": "json_schema",
+            "name": "curio_translation_model_output",
+            "schema": {"type": "object"},
+            "strict": True,
+        }
+    }
+    assert "temperature" not in payload
+    assert "max_output_tokens" not in payload
+    assert "reasoning" not in payload
+
+
+def test_openai_responses_config_rejects_invalid_tuning_values() -> None:
+    with pytest.raises(ValueError, match="temperature must be a number between 0 and 2"):
+        OpenAiResponsesConfig(temperature=True)
+
+    with pytest.raises(ValueError, match="temperature must be a number between 0 and 2"):
+        OpenAiResponsesConfig(temperature=3)
+
+    with pytest.raises(ValueError, match="reasoning_effort must be one of"):
+        OpenAiResponsesConfig(reasoning_effort="turbo")
+
+    with pytest.raises(ValueError, match="max_output_tokens must be a positive integer"):
+        OpenAiResponsesConfig(max_output_tokens=0)
+
+    with pytest.raises(ValueError, match="max_output_tokens must be a positive integer"):
+        OpenAiResponsesConfig(max_output_tokens=False)
+
+    with pytest.raises(ValueError, match="text_verbosity must be one of"):
+        OpenAiResponsesConfig(text_verbosity="verbose")
+
+    with pytest.raises(ValueError, match="model must be a string"):
+        build_openai_response_request(make_request(), model=cast(str, None))
+
+    with pytest.raises(ValueError, match="model must not be empty"):
+        build_openai_response_request(make_request(), model=" ")
 
 
 def test_parse_openai_response_output_and_usage_mapping() -> None:
     payload = make_response_payload(json.dumps({"ok": True}))
     output_value = parse_openai_response_output(payload)
-    response = build_openai_llm_response(make_request(), payload, make_timing(), output_value=output_value)
+    response = build_openai_llm_response(
+        make_request(),
+        payload,
+        make_timing(),
+        model="gpt-test",
+        output_value=output_value,
+    )
 
     assert output_value == {"ok": True}
     assert response.provider == ProviderName.OPENAI_API
@@ -204,6 +279,8 @@ def test_openai_api_client_calls_fake_transport_and_resolves_secret_at_call_time
         transport=transport,
         auth_config=make_auth_config(),
         secret_store=make_secret_store(secret),
+        model="gpt-test",
+        timeout_seconds=120,
     )
 
     response = client.complete(
@@ -230,15 +307,18 @@ def test_openai_api_client_calls_fake_transport_and_resolves_secret_at_call_time
     assert response.output.value == {"ok": True}
 
 
-def test_openai_api_client_uses_explicit_dependencies_and_default_model() -> None:
+def test_openai_api_client_uses_explicit_dependencies_and_named_config_values() -> None:
     transport = FakeOpenAiTransport()
     auth_config = make_auth_config()
     secret_store = make_secret_store()
+    responses_config = OpenAiResponsesConfig(temperature=0.5)
     client = OpenAiApiClient(
         transport=transport,
         auth_config=auth_config,
         secret_store=secret_store,
-        default_model="gpt-default",
+        model="gpt-configured",
+        timeout_seconds=90,
+        responses_config=responses_config,
     )
 
     assert client.transport is transport
@@ -246,32 +326,25 @@ def test_openai_api_client_uses_explicit_dependencies_and_default_model() -> Non
     assert client.secret_store is secret_store
     assert client.capabilities == OPENAI_API_CAPABILITIES
     assert client.provider == ProviderName.OPENAI_API
-    assert client.config.default_model == "gpt-default"
+    assert client.model == "gpt-configured"
+    assert client.timeout_seconds == 90
+    assert client.responses_config is responses_config
 
 
-def test_openai_api_client_applies_default_model_for_fake_transport() -> None:
+def test_openai_api_client_uses_configured_model_for_fake_transport() -> None:
     transport = FakeOpenAiTransport(make_response_payload(json.dumps({})))
-    client = OpenAiApiClient(
-        transport=transport,
-        auth_config=make_auth_config(),
-        secret_store=make_secret_store(),
-        default_model="gpt-default",
-    )
+    client = make_client(transport, model="gpt-configured")
 
-    response = client.complete(make_request(model=None))
+    response = client.complete(make_request())
 
     request_payload, _, _, _ = transport.calls[0]
-    assert request_payload["model"] == "gpt-default"
+    assert request_payload["model"] == "gpt-configured"
     assert response.model == "gpt-test"
 
 
 def test_openai_api_client_rejects_unsupported_capability_before_secret_lookup() -> None:
     transport = FakeOpenAiTransport()
-    client = OpenAiApiClient(
-        transport=transport,
-        auth_config=make_auth_config(),
-        secret_store=make_secret_store(),
-    )
+    client = make_client(transport)
 
     with pytest.raises(UnsupportedCapabilityError, match="thinking_time"):
         client.complete(make_request(required_capabilities=["thinking_time"]))
@@ -279,26 +352,8 @@ def test_openai_api_client_rejects_unsupported_capability_before_secret_lookup()
     assert transport.calls == []
 
 
-def test_openai_api_client_requires_model_before_secret_lookup() -> None:
-    transport = FakeOpenAiTransport()
-    client = OpenAiApiClient(
-        transport=transport,
-        auth_config=make_auth_config(),
-        secret_store=make_secret_store(),
-    )
-
-    with pytest.raises(LlmConfigurationError, match="model is required"):
-        client.complete(make_request(model=None))
-
-    assert transport.calls == []
-
-
 def test_openai_api_client_maps_transport_timeout() -> None:
-    client = OpenAiApiClient(
-        transport=FakeOpenAiTransport(exception=TimeoutError("secret timeout detail")),
-        auth_config=make_auth_config(),
-        secret_store=make_secret_store(),
-    )
+    client = make_client(FakeOpenAiTransport(exception=TimeoutError("secret timeout detail")))
 
     with pytest.raises(LlmTimeoutError) as exc:
         client.complete(make_request())
@@ -308,19 +363,11 @@ def test_openai_api_client_maps_transport_timeout() -> None:
 
 
 def test_openai_api_client_reports_invalid_or_schema_invalid_output() -> None:
-    invalid_json = OpenAiApiClient(
-        transport=FakeOpenAiTransport(make_response_payload("not json")),
-        auth_config=make_auth_config(),
-        secret_store=make_secret_store(),
-    )
+    invalid_json = make_client(FakeOpenAiTransport(make_response_payload("not json")))
     with pytest.raises(LlmInvalidOutputError, match="output_text is not valid JSON"):
         invalid_json.complete(make_request())
 
-    schema_invalid = OpenAiApiClient(
-        transport=FakeOpenAiTransport(make_response_payload(json.dumps({"ok": "yes"}))),
-        auth_config=make_auth_config(),
-        secret_store=make_secret_store(),
-    )
+    schema_invalid = make_client(FakeOpenAiTransport(make_response_payload(json.dumps({"ok": "yes"}))))
     with pytest.raises(LlmSchemaValidationError, match="output did not match requested schema"):
         schema_invalid.complete(
             make_request(
@@ -372,13 +419,19 @@ def test_parse_openai_response_output_reports_invalid_response_shapes() -> None:
         parse_openai_response_output({"status": "completed", "output": [{"type": "tool_call"}]})
 
 
-def test_build_openai_llm_response_handles_missing_usage_and_model_fallback() -> None:
+def test_build_openai_llm_response_handles_missing_usage_and_configured_model_fallback() -> None:
     payload = make_response_payload(json.dumps({}), model=None, usage={})
     output_value = parse_openai_response_output(payload)
 
-    response = build_openai_llm_response(make_request(), payload, make_timing(), output_value=output_value)
+    response = build_openai_llm_response(
+        make_request(),
+        payload,
+        make_timing(),
+        model="gpt-configured",
+        output_value=output_value,
+    )
 
-    assert response.model == "gpt-test"
+    assert response.model == "gpt-configured"
     assert response.usage.input_tokens is None
     assert response.usage.cached_input_tokens is None
     assert response.usage.output_tokens is None
@@ -393,14 +446,26 @@ def test_build_openai_llm_response_handles_absent_usage_and_nested_details() -> 
         "output": [{"type": "message", "content": [{"type": "output_text", "text": "{}"}]}],
     }
     output_value = parse_openai_response_output(no_usage_payload)
-    no_usage = build_openai_llm_response(make_request(), no_usage_payload, make_timing(), output_value=output_value)
+    no_usage = build_openai_llm_response(
+        make_request(),
+        no_usage_payload,
+        make_timing(),
+        model="gpt-configured",
+        output_value=output_value,
+    )
 
     assert no_usage.usage.input_tokens is None
     assert no_usage.usage.cached_input_tokens is None
     assert no_usage.usage.reasoning_tokens is None
 
     sparse_usage_payload = make_response_payload(usage={"input_tokens": 1, "output_tokens": 2, "total_tokens": 3})
-    sparse_usage = build_openai_llm_response(make_request(), sparse_usage_payload, make_timing(), output_value={})
+    sparse_usage = build_openai_llm_response(
+        make_request(),
+        sparse_usage_payload,
+        make_timing(),
+        model="gpt-configured",
+        output_value={},
+    )
 
     assert sparse_usage.usage.input_tokens == 1
     assert sparse_usage.usage.cached_input_tokens is None
@@ -413,6 +478,7 @@ def test_build_openai_llm_response_reports_invalid_usage_and_model_shapes() -> N
             make_request(),
             make_response_payload(usage={"input_tokens": -1}),
             make_timing(),
+            model="gpt-test",
             output_value={},
         )
 
@@ -421,6 +487,7 @@ def test_build_openai_llm_response_reports_invalid_usage_and_model_shapes() -> N
             make_request(),
             make_response_payload(usage={"output_tokens": True}),
             make_timing(),
+            model="gpt-test",
             output_value={},
         )
 
@@ -429,6 +496,7 @@ def test_build_openai_llm_response_reports_invalid_usage_and_model_shapes() -> N
             make_request(),
             make_response_payload(usage={"input_tokens_details": "bad"}),
             make_timing(),
+            model="gpt-test",
             output_value={},
         )
 
@@ -437,6 +505,7 @@ def test_build_openai_llm_response_reports_invalid_usage_and_model_shapes() -> N
             make_request(),
             make_response_payload(model=1),
             make_timing(),
+            model="gpt-test",
             output_value={},
         )
 

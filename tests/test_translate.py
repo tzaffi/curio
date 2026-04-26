@@ -10,7 +10,6 @@ from curio.llm_caller import (
     LlmResponse,
     LlmUsage,
     MeteredObject,
-    ProviderName,
 )
 from curio.schemas import SchemaName, SchemaValidationError, validate_json
 from curio.translate import (
@@ -55,9 +54,7 @@ def make_request() -> TranslationRequest:
     return TranslationRequest(
         request_id="translate-test",
         blocks=[make_block()],
-        provider="codex_cli",
-        model="gpt-test",
-        timeout_seconds=300,
+        llm_caller="codex_gpt_55",
     )
 
 
@@ -133,7 +130,7 @@ def test_translation_request_serializes_to_schema_payload() -> None:
 
     payload = request.to_json()
 
-    assert request.provider == ProviderName.CODEX_CLI
+    assert request.llm_caller == "codex_gpt_55"
     assert payload["translation_request_version"] == "curio-translation-request.v1"
     assert payload["blocks"][0]["context"] == {"artifact_kind": "tweet_json"}
     validate_json(payload, SchemaName.TRANSLATION_REQUEST)
@@ -329,11 +326,8 @@ def test_translation_request_rejects_invalid_fields() -> None:
     with pytest.raises(ValueError, match="request_id must be a string"):
         TranslationRequest(request_id=cast(str, None), blocks=[make_block()])
 
-    with pytest.raises(ValueError, match="timeout_seconds must be a positive integer"):
-        TranslationRequest(request_id="translate-test", blocks=[make_block()], timeout_seconds=0)
-
-    with pytest.raises(ValueError, match="timeout_seconds must be a positive integer"):
-        TranslationRequest(request_id="translate-test", blocks=[make_block()], timeout_seconds=False)
+    with pytest.raises(ValueError, match="llm_caller must not be empty"):
+        TranslationRequest(request_id="translate-test", blocks=[make_block()], llm_caller=" ")
 
 
 def test_translated_block_rejects_inconsistent_translation_state() -> None:

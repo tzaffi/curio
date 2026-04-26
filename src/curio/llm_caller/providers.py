@@ -50,13 +50,10 @@ _PROVIDER_ERROR_TYPES: dict[ProviderErrorKind, type[LlmCallerError]] = {
 class ProviderClientConfig:
     provider: ProviderName | str
     capabilities: Sequence[LlmCapability | str]
-    default_model: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "provider", ProviderName(self.provider))
         object.__setattr__(self, "capabilities", _coerce_declared_capabilities(self.capabilities))
-        if self.default_model is not None and not self.default_model.strip():
-            raise ValueError("default_model must not be empty")
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,7 +149,7 @@ def build_json_llm_response(
         request_id=request.request_id,
         status=LlmStatus.SUCCEEDED,
         provider=provider,
-        model=model if model is not None else request.model,
+        model=model,
         output=LlmOutput(value=output_value),
         usage=usage,
         warnings=warnings,

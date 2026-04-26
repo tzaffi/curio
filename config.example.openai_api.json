@@ -1,6 +1,12 @@
 {
-  "providers": {
-    "openai_api": {
+  "translate": {
+    "llm_caller": "openai_gpt_54_mini_cold"
+  },
+  "llm_callers": {
+    "openai_gpt_54_mini_cold": {
+      "provider": "openai_api",
+      "model": "gpt-5.4-mini",
+      "timeout_seconds": 300,
       "auth": {
         "provider": "openai_api",
         "api_key_ref": {
@@ -11,6 +17,34 @@
         },
         "organization": null,
         "project": null
+      },
+      "responses": {
+        "temperature": 0.0,
+        "reasoning_effort": "low",
+        "max_output_tokens": null,
+        "text_verbosity": "low"
+      }
+    },
+    "openai_gpt_55": {
+      "provider": "openai_api",
+      "model": "gpt-5.5",
+      "timeout_seconds": 300,
+      "auth": {
+        "provider": "openai_api",
+        "api_key_ref": {
+          "backend": "keyring",
+          "service": "curio/openai-api",
+          "account": "default-api-key",
+          "label": "OpenAI API key"
+        },
+        "organization": null,
+        "project": null
+      },
+      "responses": {
+        "temperature": null,
+        "reasoning_effort": "minimal",
+        "max_output_tokens": 2000,
+        "text_verbosity": "medium"
       }
     }
   }

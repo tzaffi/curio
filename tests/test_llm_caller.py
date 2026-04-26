@@ -40,7 +40,6 @@ def make_request() -> LlmRequest:
     return LlmRequest(
         request_id="translate-test",
         workflow="translate",
-        model="gpt-test",
         instructions="Return JSON.",
         input=[
             LlmMessage(
@@ -53,7 +52,6 @@ def make_request() -> LlmRequest:
             "text_generation",
             LlmCapability.JSON_SCHEMA_OUTPUT,
         ],
-        timeout_seconds=300,
         metadata={"source": "test"},
     )
 
@@ -105,7 +103,6 @@ def test_llm_request_preserves_accepted_string_values() -> None:
     request = LlmRequest(
         request_id=" translate-test ",
         workflow="translate",
-        model=None,
         instructions="Return JSON.",
         input=[LlmMessage(role="user", content=[TextContentPart(text=" keep spacing ")])],
         output=JsonSchemaOutput(name="output", schema={}),
@@ -258,7 +255,6 @@ def test_llm_request_rejects_empty_input() -> None:
         LlmRequest(
             request_id="translate-test",
             workflow="translate",
-            model=None,
             instructions="Return JSON.",
             input=[],
             output=JsonSchemaOutput(name="output", schema={}),
@@ -270,7 +266,6 @@ def test_llm_request_rejects_invalid_scalar_fields() -> None:
         LlmRequest(
             request_id=" ",
             workflow="translate",
-            model=None,
             instructions="Return JSON.",
             input=[LlmMessage(role="user", content=[TextContentPart(text="hi")])],
             output=JsonSchemaOutput(name="output", schema={}),
@@ -280,41 +275,16 @@ def test_llm_request_rejects_invalid_scalar_fields() -> None:
         LlmRequest(
             request_id=cast(str, None),
             workflow="translate",
-            model=None,
             instructions="Return JSON.",
             input=[LlmMessage(role="user", content=[TextContentPart(text="hi")])],
             output=JsonSchemaOutput(name="output", schema={}),
         )
-
-    with pytest.raises(ValueError, match="timeout_seconds must be a positive integer"):
-        LlmRequest(
-            request_id="translate-test",
-            workflow="translate",
-            model=None,
-            instructions="Return JSON.",
-            input=[LlmMessage(role="user", content=[TextContentPart(text="hi")])],
-            output=JsonSchemaOutput(name="output", schema={}),
-            timeout_seconds=0,
-        )
-
-    with pytest.raises(ValueError, match="timeout_seconds must be a positive integer"):
-        LlmRequest(
-            request_id="translate-test",
-            workflow="translate",
-            model=None,
-            instructions="Return JSON.",
-            input=[LlmMessage(role="user", content=[TextContentPart(text="hi")])],
-            output=JsonSchemaOutput(name="output", schema={}),
-            timeout_seconds=False,
-        )
-
 
 def test_llm_request_rejects_duplicate_capabilities() -> None:
     with pytest.raises(ValueError, match="capabilities must be unique"):
         LlmRequest(
             request_id="translate-test",
             workflow="translate",
-            model=None,
             instructions="Return JSON.",
             input=[LlmMessage(role="user", content=[TextContentPart(text="hi")])],
             output=JsonSchemaOutput(name="output", schema={}),

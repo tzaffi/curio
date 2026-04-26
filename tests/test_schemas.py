@@ -67,7 +67,6 @@ def test_validate_json_rejects_auth_capability_in_llm_request() -> None:
         "llm_request_version": "curio-llm-request.v1",
         "request_id": "translate-test",
         "workflow": "translate",
-        "model": None,
         "instructions": "Return JSON.",
         "input": [
             {
@@ -82,7 +81,6 @@ def test_validate_json_rejects_auth_capability_in_llm_request() -> None:
             "strict": True,
         },
         "required_capabilities": ["chatgpt_auth"],
-        "timeout_seconds": 300,
         "metadata": {},
     }
 

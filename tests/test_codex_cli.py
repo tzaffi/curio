@@ -12,8 +12,10 @@ from curio.llm_caller import (
     CodexCliClient,
     CodexCliCommand,
     CodexCliExecConfig,
+    CodexCliReasoningEffort,
     CodexCliRunner,
     CodexCliRunResult,
+    CodexCliVerbosity,
     JsonSchemaOutput,
     LlmConfigurationError,
     LlmInvalidOutputError,
@@ -36,11 +38,10 @@ from curio.llm_caller import (
 )
 
 
-def make_request(model: str | None = "gpt-test", output_schema: dict[str, object] | None = None) -> LlmRequest:
+def make_request(output_schema: dict[str, object] | None = None) -> LlmRequest:
     return LlmRequest(
         request_id="translate-test",
         workflow="translate",
-        model=model,
         instructions="Return translated blocks as JSON.",
         input=[
             LlmMessage(role="system", content=[TextContentPart(text="System context.")]),
@@ -51,7 +52,6 @@ def make_request(model: str | None = "gpt-test", output_schema: dict[str, object
             schema={"type": "object"} if output_schema is None else output_schema,
         ),
         required_capabilities=["text_generation", "json_schema_output"],
-        timeout_seconds=120,
         metadata={},
     )
 
@@ -105,31 +105,39 @@ def make_client(
     *,
     auth_config: CodexCliAuthConfig | None = None,
     exec_config: CodexCliExecConfig | None = None,
-    default_model: str | None = None,
+    model: str = "codex-default",
+    timeout_seconds: int = 120,
 ) -> CodexCliClient:
     return CodexCliClient(
         runner=runner,
         exec_config=CodexCliExecConfig() if exec_config is None else exec_config,
         auth_config=CodexCliAuthConfig() if auth_config is None else auth_config,
         working_directory=tmp_path,
+        model=model,
+        timeout_seconds=timeout_seconds,
         output_schema_dir=tmp_path,
-        default_model=default_model,
     )
 
 
 def test_build_codex_exec_command_uses_stdin_prompt_and_safe_defaults() -> None:
     request = make_request()
+    exec_config = CodexCliExecConfig(
+        skip_git_repo_check=True,
+        ignore_user_config=True,
+        model_reasoning_effort="low",
+        model_verbosity=CodexCliVerbosity.MEDIUM,
+        extra_config=["feature_flag=true"],
+    )
     command = build_codex_exec_command(
         request,
+        model="gpt-test",
         output_schema_path=Path("/tmp/curio-output.schema.json"),
         working_directory=Path("/Users/zeph/github/tzaffi/curio"),
-        config=CodexCliExecConfig(
-            skip_git_repo_check=True,
-            ignore_user_config=True,
-            extra_config=["model_reasoning_effort=low"],
-        ),
+        config=exec_config,
     )
 
+    assert exec_config.model_reasoning_effort == CodexCliReasoningEffort.LOW
+    assert exec_config.model_verbosity == CodexCliVerbosity.MEDIUM
     assert command.argv == (
         "codex",
         "exec",
@@ -146,7 +154,11 @@ def test_build_codex_exec_command_uses_stdin_prompt_and_safe_defaults() -> None:
         "--cd",
         "/Users/zeph/github/tzaffi/curio",
         "--config",
-        "model_reasoning_effort=low",
+        "model_reasoning_effort=\"low\"",
+        "--config",
+        "model_verbosity=\"medium\"",
+        "--config",
+        "feature_flag=true",
         "--model",
         "gpt-test",
         "-",
@@ -159,9 +171,10 @@ def test_build_codex_exec_command_uses_stdin_prompt_and_safe_defaults() -> None:
     assert "--output-schema" in command.stdin_text
 
 
-def test_build_codex_exec_command_accepts_minimal_config_without_model() -> None:
+def test_build_codex_exec_command_accepts_minimal_config_without_empty_config() -> None:
     command = build_codex_exec_command(
-        make_request(model=None),
+        make_request(),
+        model="gpt-test",
         output_schema_path=Path("schema.json"),
         config=CodexCliExecConfig(json_events=False, ephemeral=False),
         working_directory=Path("/Users/zeph/github/tzaffi/curio"),
@@ -178,12 +191,16 @@ def test_build_codex_exec_command_accepts_minimal_config_without_model() -> None
         "schema.json",
         "--cd",
         "/Users/zeph/github/tzaffi/curio",
+        "--model",
+        "gpt-test",
         "-",
     )
+    assert "--config" not in command.argv
 
     with pytest.raises(ValueError, match="working_directory must be a path"):
         build_codex_exec_command(
-            make_request(model=None),
+            make_request(),
+            model="gpt-test",
             output_schema_path=Path("schema.json"),
             config=CodexCliExecConfig(),
             working_directory=cast(Path, None),
@@ -199,6 +216,12 @@ def test_codex_exec_config_rejects_empty_values() -> None:
 
     with pytest.raises(ValueError, match="config override must not be empty"):
         CodexCliExecConfig(extra_config=[""])
+
+    with pytest.raises(ValueError, match="model_reasoning_effort must be one of"):
+        CodexCliExecConfig(model_reasoning_effort="turbo")
+
+    with pytest.raises(ValueError, match="model_verbosity must be one of"):
+        CodexCliExecConfig(model_verbosity="verbose")
 
 
 def test_parse_codex_exec_jsonl_extracts_final_agent_message_usage_and_warnings() -> None:
@@ -235,7 +258,7 @@ def test_parse_codex_exec_jsonl_extracts_final_agent_message_usage_and_warnings(
     assert result.usage_total_tokens == 27
     assert result.warnings == ("provider warning",)
 
-    response = build_codex_llm_response(make_request(), result, make_timing())
+    response = build_codex_llm_response(make_request(), result, make_timing(), model="gpt-test")
     assert response.provider == ProviderName.CODEX_CLI
     assert response.model == "gpt-test"
     assert response.output is not None
@@ -388,9 +411,9 @@ def test_codex_cli_client_calls_fake_runner_and_validates_schema(tmp_path: Path)
             {"type": "turn.completed", "usage": {"input_tokens": 6, "output_tokens": 2, "total_tokens": 8}},
         )
     )
-    client = make_client(runner, tmp_path, default_model="codex-default")
+    client = make_client(runner, tmp_path, model="codex-default", timeout_seconds=120)
 
-    response = client.complete(make_request(model=None, output_schema=output_schema))
+    response = client.complete(make_request(output_schema=output_schema))
 
     assert runner.schema_payload == output_schema
     assert runner.schema_path is not None
@@ -425,7 +448,6 @@ def test_codex_cli_client_rejects_unsupported_capabilities_before_runner(tmp_pat
     request = LlmRequest(
         request_id="translate-test",
         workflow="translate",
-        model=None,
         instructions="Return JSON.",
         input=[LlmMessage(role="user", content=[TextContentPart(text="hi")])],
         output=JsonSchemaOutput(name="output", schema={"type": "object"}),
@@ -437,16 +459,6 @@ def test_codex_cli_client_rejects_unsupported_capabilities_before_runner(tmp_pat
 
     assert runner.calls == []
     assert CODEX_CLI_CAPABILITIES == client.capabilities
-
-
-def test_codex_cli_client_requires_model_before_runner(tmp_path: Path) -> None:
-    runner = FakeCodexCliRunner(stdout=jsonl({"type": "agent_message", "text": "{}"}))
-    client = make_client(runner, tmp_path)
-
-    with pytest.raises(LlmConfigurationError, match="model is required"):
-        client.complete(make_request(model=None))
-
-    assert runner.calls == []
 
 
 def test_codex_cli_client_keeps_api_key_handoff_isolated_before_runner(tmp_path: Path) -> None:
@@ -585,5 +597,29 @@ def test_codex_cli_client_requires_explicit_working_directory(tmp_path: Path) ->
             exec_config=CodexCliExecConfig(),
             auth_config=CodexCliAuthConfig(),
             working_directory=cast(Path, None),
+            model="gpt-test",
+            timeout_seconds=120,
+            output_schema_dir=tmp_path,
+        )
+
+    with pytest.raises(ValueError, match="timeout_seconds must be a positive integer"):
+        CodexCliClient(
+            runner=FakeCodexCliRunner(),
+            exec_config=CodexCliExecConfig(),
+            auth_config=CodexCliAuthConfig(),
+            working_directory=tmp_path,
+            model="gpt-test",
+            timeout_seconds=False,
+            output_schema_dir=tmp_path,
+        )
+
+    with pytest.raises(ValueError, match="timeout_seconds must be a positive integer"):
+        CodexCliClient(
+            runner=FakeCodexCliRunner(),
+            exec_config=CodexCliExecConfig(),
+            auth_config=CodexCliAuthConfig(),
+            working_directory=tmp_path,
+            model="gpt-test",
+            timeout_seconds=0,
             output_schema_dir=tmp_path,
         )

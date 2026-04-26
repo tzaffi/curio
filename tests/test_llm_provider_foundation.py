@@ -36,7 +36,6 @@ def make_request() -> LlmRequest:
     return LlmRequest(
         request_id="translate-test",
         workflow="translate",
-        model="gpt-test",
         instructions="Return JSON.",
         input=[LlmMessage(role="user", content=[TextContentPart(text="Translate this.")])],
         output=JsonSchemaOutput(name="curio_translation_model_output", schema={"type": "object"}),
@@ -44,7 +43,6 @@ def make_request() -> LlmRequest:
             LlmCapability.TEXT_GENERATION,
             LlmCapability.JSON_SCHEMA_OUTPUT,
         ],
-        timeout_seconds=300,
         metadata={},
     )
 
@@ -65,7 +63,6 @@ def test_provider_client_config_normalizes_values_and_rejects_invalid_shapes() -
     config = ProviderClientConfig(
         provider="codex_cli",
         capabilities=["text_generation", LlmCapability.JSON_SCHEMA_OUTPUT],
-        default_model="gpt-test",
     )
 
     assert config.provider == ProviderName.CODEX_CLI
@@ -73,16 +70,11 @@ def test_provider_client_config_normalizes_values_and_rejects_invalid_shapes() -
         LlmCapability.TEXT_GENERATION,
         LlmCapability.JSON_SCHEMA_OUTPUT,
     )
-    assert config.default_model == "gpt-test"
-
     with pytest.raises(ValueError, match="capabilities must not be empty"):
         ProviderClientConfig(provider="codex_cli", capabilities=[])
 
     with pytest.raises(ValueError, match="capabilities must be unique"):
         ProviderClientConfig(provider="codex_cli", capabilities=["text_generation", "text_generation"])
-
-    with pytest.raises(ValueError, match="default_model must not be empty"):
-        ProviderClientConfig(provider="codex_cli", capabilities=["text_generation"], default_model=" ")
 
 
 def test_provider_base_checks_capabilities_before_provider_work() -> None:
@@ -187,11 +179,11 @@ def test_measure_provider_call_and_build_provider_usage() -> None:
     assert real_timing.wall_seconds >= 0
 
 
-def test_build_json_llm_response_defaults_to_request_model() -> None:
+def test_build_json_llm_response_uses_provider_model() -> None:
     response = build_json_llm_response(
         make_request(),
         provider="openai_api",
-        model=None,
+        model="provider-model",
         output_value={"translated_blocks": []},
         usage=make_usage(),
         warnings=["provider warning"],
@@ -199,7 +191,7 @@ def test_build_json_llm_response_defaults_to_request_model() -> None:
 
     assert response.status == LlmStatus.SUCCEEDED
     assert response.provider == ProviderName.OPENAI_API
-    assert response.model == "gpt-test"
+    assert response.model == "provider-model"
     assert response.output is not None
     assert response.output.value == {"translated_blocks": []}
     assert response.warnings == ("provider warning",)

@@ -102,9 +102,7 @@ The stable JSON representation of a translation request is:
       }
     }
   ],
-  "provider": "codex_cli",
-  "model": null,
-  "timeout_seconds": 300
+  "llm_caller": null
 }
 ```
 
@@ -120,12 +118,11 @@ Fields:
   Minimum model confidence for treating a block as English without translation. V1 defaults to `0.90`.
 - `blocks`
   Ordered source text blocks to detect and possibly translate.
-- `provider`
-  Optional provider override passed to `curio.llm_caller`.
-- `model`
-  Optional model override passed to `curio.llm_caller`.
-- `timeout_seconds`
-  Optional provider-call wall-clock timeout.
+- `llm_caller`
+  Optional named LLM caller config passed to `curio.llm_caller`. When this is null or absent, the CLI uses `config.json` `translate.llm_caller` unless `--llm-caller` is supplied.
+
+Standalone CLI caller resolution precedence is CLI `--llm-caller`, then
+structured JSON `llm_caller`, then `config.json` `translate.llm_caller`.
 
 Each `blocks` item contains:
 
@@ -238,8 +235,8 @@ V1 uses model-reported English confidence estimates as a heuristic for deciding 
 The default policy is:
 
 - `default_english_confidence_threshold = 0.90`
-- unknown providers and models use the default threshold and the default prompt rubric
-- provider/model-specific overrides may change the threshold and prompt rubric while preserving the same public response shape
+- unknown named callers use the default threshold and the default prompt rubric
+- caller-specific overrides may change the threshold and prompt rubric while preserving the same public response shape
 - the resolved threshold is included in each `TranslationRequest` for reproducibility
 - `english_confidence_estimate` is produced by the model according to the resolved rubric
 
@@ -247,7 +244,7 @@ Model-specific confidence behavior belongs in Curio configuration and prompt pol
 
 ## V1 Prompt Template
 
-V1 uses one canonical prompt template for all providers and models. It must ask the primary model to perform language classification and conditional translation in a single round trip.
+V1 uses one canonical prompt template for all named callers. It must ask the configured model to perform language classification and conditional translation in a single round trip.
 
 The prompt must include:
 
@@ -414,7 +411,7 @@ The translation spec is satisfied only if all of the following are true:
 - raw CLI text can be translated to English
 - structured JSON input can be translated to structured JSON output
 - the same translation service can be called from the main Curio workflow
-- translation can use either `openai_api` or `codex_cli` through `curio.llm_caller`
+- translation can use named `openai_api` or `codex_cli` callers through `curio.llm_caller`
 - translation classifies language and conditionally translates in one model round trip
 - English blocks above the configured threshold remain untranslated
 - low English-confidence estimates are translated rather than aborted and do not create warnings by themselves

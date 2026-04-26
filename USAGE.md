@@ -3,7 +3,7 @@
 Curio reads explicit runtime configuration from `config.json`. It does not fall
 back to checked-in example files.
 
-## Pick A Provider Config
+## Pick LLM Callers
 
 Use Codex CLI through your ChatGPT login:
 
@@ -17,23 +17,30 @@ Use the OpenAI API directly:
 cp config.example.openai_api.json config.json
 ```
 
-Then edit `config.json`. The file may contain one provider or both providers,
-but the provider you pass to `curio translate --provider ...` must exist in
-`config.json`.
+Then edit `config.json`. The file contains named `llm_callers` and a
+`translate.llm_caller` default. Normal translation commands use that configured
+default. Pass `--llm-caller NAME` only when you want to override the config or
+structured JSON request for one run.
+
+Each named caller owns its provider, model, auth config, timeout, and
+provider-specific tuning. Runtime model overrides are intentionally not
+supported.
 
 Raw secrets do not go in `config.json`. Only Keychain locator metadata belongs
 there.
 
 ## Codex CLI Values
 
-Use `config.example.codex_cli.json` for `--provider codex_cli`.
+Use a Codex caller such as `codex_gpt_55` or `codex_gpt_54_mini`.
 
 Important fields:
 
-- `providers.codex_cli.auth.mode`: use `chatgpt` for normal ChatGPT-plan login.
-- `providers.codex_cli.auth.require_keyring_credentials_store`: keep this `true`.
-- `providers.codex_cli.exec.executable`: usually `codex`.
-- `providers.codex_cli.exec.sandbox`: usually `read-only`.
+- `llm_callers.NAME.provider`: `codex_cli`
+- `llm_callers.NAME.model`: the Codex model for this named caller
+- `llm_callers.NAME.timeout_seconds`: provider-call wall-clock timeout
+- `llm_callers.NAME.auth.mode`: use `chatgpt` for normal ChatGPT-plan login
+- `llm_callers.NAME.exec.model_reasoning_effort`: optional Codex reasoning effort
+- `llm_callers.NAME.exec.model_verbosity`: optional Codex verbosity
 
 Before running Curio with Codex CLI, configure Codex auth as described in
 [AUTHENTICATION.md](AUTHENTICATION.md), including the top-level
@@ -42,19 +49,24 @@ Before running Curio with Codex CLI, configure Codex auth as described in
 Run a translation:
 
 ```bash
-uv run curio translate --provider codex_cli --model YOUR_MODEL "bonjour"
+uv run curio translate "bonjour"
 ```
 
 ## OpenAI API Values
 
-Use `config.example.openai_api.json` for `--provider openai_api`.
+Use an OpenAI caller such as `openai_gpt_54_mini_cold`.
 
 Important fields:
 
-- `providers.openai_api.auth.api_key_ref.service`
-- `providers.openai_api.auth.api_key_ref.account`
-- `providers.openai_api.auth.organization`
-- `providers.openai_api.auth.project`
+- `llm_callers.NAME.provider`: `openai_api`
+- `llm_callers.NAME.model`: the OpenAI model for this named caller
+- `llm_callers.NAME.timeout_seconds`: provider-call wall-clock timeout
+- `llm_callers.NAME.auth.api_key_ref.service`
+- `llm_callers.NAME.auth.api_key_ref.account`
+- `llm_callers.NAME.responses.temperature`
+- `llm_callers.NAME.responses.reasoning_effort`
+- `llm_callers.NAME.responses.max_output_tokens`
+- `llm_callers.NAME.responses.text_verbosity`
 
 Store the API key in Keychain at the configured locator:
 
@@ -67,20 +79,12 @@ The API key dashboard is here:
 <https://platform.openai.com/api-keys>
 
 `organization` and `project` may be `null` when the key itself is already
-scoped the way you want. If you need explicit headers, OpenAI documents that
-organization IDs are found on the organization settings page and project IDs
-are found on the selected project's general settings page:
-
-<https://platform.openai.com/docs/api-reference>
-
-The Projects API reference shows project IDs in the `proj_...` form:
-
-<https://platform.openai.com/docs/api-reference/projects>
+scoped the way you want.
 
 Run a translation:
 
 ```bash
-uv run curio translate --provider openai_api --model YOUR_MODEL "bonjour"
+uv run curio translate "bonjour"
 ```
 
 ## Custom Config Path
@@ -88,18 +92,30 @@ uv run curio translate --provider openai_api --model YOUR_MODEL "bonjour"
 Use `--config` when the file is not `./config.json`:
 
 ```bash
-uv run curio translate --config ./my-curio-config.json --provider openai_api --model YOUR_MODEL "bonjour"
+uv run curio translate --config ./my-curio-config.json "bonjour"
 ```
+
+Override the configured translation caller for one run:
+
+```bash
+uv run curio translate --llm-caller openai_gpt_54_mini_cold "bonjour"
+```
+
+Translation caller precedence is:
+
+1. CLI `--llm-caller`
+2. structured JSON `llm_caller`
+3. `config.json` `translate.llm_caller`
 
 ## Expected Fail-Fast Behavior
 
 Curio fails instead of guessing when:
 
 - `config.json` is missing
-- the selected provider is not present in config
+- the selected named LLM caller is not present in config
 - provider auth config is missing
-- Codex CLI exec config is missing
-- `--provider` is missing for raw text input
-- OpenAI API or Codex CLI model is missing
+- provider-specific runtime config is missing
+- no LLM caller is available from `--llm-caller`, structured JSON, or `translate.llm_caller`
+- a named caller has an invalid model, timeout, or tuning value
 
 See [AUTHENTICATION.md](AUTHENTICATION.md) for the secure setup details.

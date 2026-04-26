@@ -8,7 +8,6 @@ from curio.llm_caller import (
     LlmMessage,
     LlmMessageRole,
     LlmRequest,
-    ProviderName,
     TextContentPart,
 )
 from curio.schemas import SchemaName, load_schema
@@ -16,7 +15,6 @@ from curio.translate.models import JsonObject, TranslationRequest
 
 TRANSLATION_WORKFLOW = "translate"
 TRANSLATION_MODEL_OUTPUT_SCHEMA_NAME = "curio_translation_model_output"
-DEFAULT_TRANSLATION_TIMEOUT_SECONDS = 300
 
 TRANSLATION_INSTRUCTIONS = (
     "Return only JSON that satisfies the provided schema. "
@@ -72,11 +70,9 @@ def build_translation_prompt(request: TranslationRequest) -> str:
 
 
 def build_translation_llm_request(request: TranslationRequest) -> LlmRequest:
-    provider = None if request.provider is None else cast(ProviderName, request.provider).value
     return LlmRequest(
         request_id=request.request_id,
         workflow=TRANSLATION_WORKFLOW,
-        model=request.model,
         instructions=TRANSLATION_INSTRUCTIONS,
         input=[
             LlmMessage(
@@ -93,9 +89,8 @@ def build_translation_llm_request(request: TranslationRequest) -> LlmRequest:
             LlmCapability.TEXT_GENERATION,
             LlmCapability.JSON_SCHEMA_OUTPUT,
         ),
-        timeout_seconds=request.timeout_seconds or DEFAULT_TRANSLATION_TIMEOUT_SECONDS,
         metadata={
             "source": "curio.translate",
-            "provider": provider,
+            "llm_caller": request.llm_caller,
         },
     )

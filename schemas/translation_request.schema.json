@@ -34,41 +34,8 @@
         "$ref": "#/$defs/block"
       }
     },
-    "provider": {
-      "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "openai_api",
-            "codex_cli"
-          ]
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "model": {
-      "oneOf": [
-        {
-          "type": "string",
-          "minLength": 1
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "timeout_seconds": {
-      "oneOf": [
-        {
-          "type": "integer",
-          "minimum": 1
-        },
-        {
-          "type": "null"
-        }
-      ]
+    "llm_caller": {
+      "$ref": "#/$defs/nullableNonEmptyString"
     }
   },
   "$defs": {

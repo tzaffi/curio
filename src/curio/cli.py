@@ -6,15 +6,14 @@ from typing import Annotated, NoReturn, cast
 import click
 import typer
 
-from curio.config import ConfigError, load_config
+from curio.config import ConfigError, CurioConfig, load_config
 from curio.llm_caller import (
     KeyringSecretStore,
     LlmCallerError,
     LlmClient,
-    ProviderName,
     SdkOpenAiApiTransport,
     SubprocessCodexCliRunner,
-    build_provider_client,
+    build_llm_caller_client,
 )
 from curio.schemas import SchemaValidationError
 from curio.translate import (
@@ -34,8 +33,7 @@ app = typer.Typer(
 
 RAW_CLI_BLOCK_ID = 1
 RAW_CLI_BLOCK_NAME = "cli_text"
-DEFAULT_TIMEOUT_SECONDS = 300
-PROVIDER_REQUIRED_MESSAGE = "provider must be explicitly configured with --provider or input JSON"
+LLM_CALLER_REQUIRED_MESSAGE = "llm_caller must be configured with --llm-caller, input JSON, or translate.llm_caller"
 
 
 @app.callback()
@@ -50,10 +48,15 @@ def _reserved(command: str) -> None:
     raise typer.Exit(1)
 
 
-def _build_provider_client(provider: ProviderName | str, config_path: Path | None) -> LlmClient:
-    return build_provider_client(
-        provider,
-        load_config(config_path),
+def _build_llm_caller_client(
+    llm_caller: str,
+    config_path: Path | None,
+    config: CurioConfig | None = None,
+) -> LlmClient:
+    curio_config = load_config(config_path) if config is None else config
+    return build_llm_caller_client(
+        llm_caller,
+        curio_config,
         secret_store=KeyringSecretStore(),
         codex_runner=SubprocessCodexCliRunner(),
         openai_transport=SdkOpenAiApiTransport(),
@@ -61,8 +64,14 @@ def _build_provider_client(provider: ProviderName | str, config_path: Path | Non
     )
 
 
-def _build_translation_service(provider: ProviderName | str, config_path: Path | None) -> TranslationService:
-    return TranslationService(llm_client=_build_provider_client(provider, config_path))
+def _build_translation_service(
+    llm_caller: str,
+    config_path: Path | None,
+    config: CurioConfig | None = None,
+) -> TranslationService:
+    if config is None:
+        return TranslationService(llm_client=_build_llm_caller_client(llm_caller, config_path))
+    return TranslationService(llm_client=_build_llm_caller_client(llm_caller, config_path, config=config))
 
 
 def _fail_usage(message: str) -> NoReturn:
@@ -113,9 +122,7 @@ def _raw_translation_request(
     source_language: str | None,
     target_language: str,
     english_confidence_threshold: float,
-    provider: str,
-    model: str | None,
-    timeout_seconds: int,
+    llm_caller: str | None,
 ) -> TranslationRequest:
     return TranslationRequest(
         request_id=_new_translation_request_id(),
@@ -129,9 +136,7 @@ def _raw_translation_request(
                 text=raw_text,
             )
         ],
-        provider=provider,
-        model=model,
-        timeout_seconds=timeout_seconds,
+        llm_caller=llm_caller,
     )
 
 
@@ -141,13 +146,9 @@ def _apply_structured_request_overrides(
     *,
     target_language: str,
     english_confidence_threshold: float,
-    provider: str | None,
-    model: str | None,
-    timeout_seconds: int,
+    llm_caller: str | None,
 ) -> TranslationRequest:
-    selected_provider = provider if _parameter_was_set(ctx, "provider") else request.provider
-    if selected_provider is None:
-        raise ValueError(PROVIDER_REQUIRED_MESSAGE)
+    selected_llm_caller = llm_caller if _parameter_was_set(ctx, "llm_caller") else request.llm_caller
     return TranslationRequest(
         request_id=request.request_id,
         target_language=target_language if _parameter_was_set(ctx, "target_language") else request.target_language,
@@ -155,11 +156,7 @@ def _apply_structured_request_overrides(
         if _parameter_was_set(ctx, "english_confidence_threshold")
         else request.english_confidence_threshold,
         blocks=request.blocks,
-        provider=selected_provider,
-        model=model if _parameter_was_set(ctx, "model") or request.model is None else request.model,
-        timeout_seconds=timeout_seconds
-        if _parameter_was_set(ctx, "timeout_seconds") or request.timeout_seconds is None
-        else request.timeout_seconds,
+        llm_caller=selected_llm_caller,
     )
 
 
@@ -172,9 +169,7 @@ def _translation_request_from_cli(
     source_language: str | None,
     target_language: str,
     english_confidence_threshold: float,
-    provider: str | None,
-    model: str | None,
-    timeout_seconds: int,
+    llm_caller: str | None,
 ) -> TranslationRequest:
     stdin_text = _read_stdin_text()
     input_mode_count = sum(
@@ -197,9 +192,7 @@ def _translation_request_from_cli(
                 _load_translation_request(input_json),
                 target_language=target_language,
                 english_confidence_threshold=english_confidence_threshold,
-                provider=provider,
-                model=model,
-                timeout_seconds=timeout_seconds,
+                llm_caller=llm_caller,
             )
 
         if text is not None:
@@ -208,17 +201,12 @@ def _translation_request_from_cli(
             raw_text = _read_text_file(input_file, "--input-file")
         else:
             raw_text = cast(str, stdin_text)
-        if provider is None:
-            _fail_usage(PROVIDER_REQUIRED_MESSAGE)
-
         return _raw_translation_request(
             raw_text,
             source_language=source_language,
             target_language=target_language,
             english_confidence_threshold=english_confidence_threshold,
-            provider=provider,
-            model=model,
-            timeout_seconds=timeout_seconds,
+            llm_caller=llm_caller,
         )
     except (SchemaValidationError, TranslationError, ValueError) as exc:
         _fail_usage(str(exc))
@@ -256,10 +244,35 @@ def _write_output(rendered_output: str, output: Path | None) -> None:
         _fail_runtime(f"could not write --output: {exc}")
 
 
-def _request_provider(request: TranslationRequest) -> ProviderName:
-    if request.provider is None:
-        _fail_usage(PROVIDER_REQUIRED_MESSAGE)
-    return cast(ProviderName, request.provider)
+def _request_llm_caller(request: TranslationRequest) -> str:
+    if request.llm_caller is None:
+        _fail_usage(LLM_CALLER_REQUIRED_MESSAGE)
+    return request.llm_caller
+
+
+def _request_with_llm_caller(request: TranslationRequest, llm_caller: str) -> TranslationRequest:
+    return TranslationRequest(
+        request_id=request.request_id,
+        target_language=request.target_language,
+        english_confidence_threshold=request.english_confidence_threshold,
+        blocks=request.blocks,
+        llm_caller=llm_caller,
+    )
+
+
+def _resolve_translation_request_llm_caller(
+    request: TranslationRequest,
+    config_path: Path | None,
+) -> tuple[TranslationRequest, CurioConfig | None]:
+    if request.llm_caller is not None:
+        return request, None
+    try:
+        config = load_config(config_path)
+    except ConfigError as exc:
+        _fail_runtime(str(exc))
+    if config.translate_config.llm_caller is None:
+        _fail_usage(LLM_CALLER_REQUIRED_MESSAGE)
+    return _request_with_llm_caller(request, config.translate_config.llm_caller), config
 
 
 @app.command("translate")
@@ -289,15 +302,10 @@ def translate(
         float,
         typer.Option("--english-confidence-threshold", help="Confidence threshold for treating text as English."),
     ] = DEFAULT_ENGLISH_CONFIDENCE_THRESHOLD,
-    provider: Annotated[
+    llm_caller: Annotated[
         str | None,
-        typer.Option("--provider", help="LLM provider. Required unless --input-json contains provider."),
+        typer.Option("--llm-caller", help="Override the configured or input JSON named LLM caller."),
     ] = None,
-    model: Annotated[str | None, typer.Option("--model", help="Provider model override.")] = None,
-    timeout_seconds: Annotated[
-        int,
-        typer.Option("--timeout-seconds", help="Provider-call wall-clock timeout."),
-    ] = DEFAULT_TIMEOUT_SECONDS,
 ) -> None:
     """Translate text into English."""
     request = _translation_request_from_cli(
@@ -308,12 +316,16 @@ def translate(
         source_language=source_language,
         target_language=target_language,
         english_confidence_threshold=english_confidence_threshold,
-        provider=provider,
-        model=model,
-        timeout_seconds=timeout_seconds,
+        llm_caller=llm_caller,
     )
+    request, config = _resolve_translation_request_llm_caller(request, config_path)
     try:
-        response = _build_translation_service(_request_provider(request), config_path).translate(request)
+        if config is None:
+            response = _build_translation_service(_request_llm_caller(request), config_path).translate(request)
+        else:
+            response = _build_translation_service(_request_llm_caller(request), config_path, config=config).translate(
+                request
+            )
     except (ConfigError, LlmCallerError, TranslationError) as exc:
         _fail_runtime(str(exc))
 

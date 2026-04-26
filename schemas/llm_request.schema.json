@@ -8,12 +8,10 @@
     "llm_request_version",
     "request_id",
     "workflow",
-    "model",
     "instructions",
     "input",
     "output",
     "required_capabilities",
-    "timeout_seconds",
     "metadata"
   ],
   "properties": {
@@ -27,9 +25,6 @@
     "workflow": {
       "type": "string",
       "minLength": 1
-    },
-    "model": {
-      "$ref": "#/$defs/nullableNonEmptyString"
     },
     "instructions": {
       "type": "string",
@@ -52,27 +47,12 @@
       },
       "uniqueItems": true
     },
-    "timeout_seconds": {
-      "type": "integer",
-      "minimum": 1
-    },
     "metadata": {
       "type": "object",
       "additionalProperties": true
     }
   },
   "$defs": {
-    "nullableNonEmptyString": {
-      "oneOf": [
-        {
-          "type": "string",
-          "minLength": 1
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
     "capability": {
       "type": "string",
       "enum": [

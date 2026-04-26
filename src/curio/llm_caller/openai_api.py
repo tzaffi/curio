@@ -1,6 +1,7 @@
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol, cast
 
 from jsonschema import Draft202012Validator, FormatChecker
@@ -23,7 +24,6 @@ from curio.llm_caller.models import (
     JsonValue,
     LlmAuthError,
     LlmCapability,
-    LlmConfigurationError,
     LlmInvalidOutputError,
     LlmMessage,
     LlmMessageRole,
@@ -50,6 +50,43 @@ OPENAI_API_CAPABILITIES = (
     LlmCapability.CACHED_INPUT_USAGE,
     LlmCapability.REASONING_TOKEN_USAGE,
 )
+
+
+class OpenAiReasoningEffort(StrEnum):
+    NONE = "none"
+    MINIMAL = "minimal"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    XHIGH = "xhigh"
+
+
+class OpenAiTextVerbosity(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+@dataclass(frozen=True, slots=True)
+class OpenAiResponsesConfig:
+    temperature: float | int | None = None
+    reasoning_effort: OpenAiReasoningEffort | str | None = None
+    max_output_tokens: int | None = None
+    text_verbosity: OpenAiTextVerbosity | str | None = None
+
+    def __post_init__(self) -> None:
+        _require_optional_temperature(self.temperature, "temperature")
+        object.__setattr__(
+            self,
+            "reasoning_effort",
+            _coerce_optional_str_enum(self.reasoning_effort, "reasoning_effort", OpenAiReasoningEffort),
+        )
+        _require_optional_positive_int(self.max_output_tokens, "max_output_tokens")
+        object.__setattr__(
+            self,
+            "text_verbosity",
+            _coerce_optional_str_enum(self.text_verbosity, "text_verbosity", OpenAiTextVerbosity),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,36 +152,42 @@ class OpenAiApiClient(ProviderClientBase):
         transport: OpenAiApiTransport,
         auth_config: OpenAiApiAuthConfig,
         secret_store: SecretStore,
-        default_model: str | None = None,
+        model: str,
+        timeout_seconds: int,
+        responses_config: OpenAiResponsesConfig | None = None,
     ) -> None:
         super().__init__(
             ProviderClientConfig(
                 provider=ProviderName.OPENAI_API,
                 capabilities=OPENAI_API_CAPABILITIES,
-                default_model=default_model,
             )
         )
         self.transport = transport
         self.auth_config = auth_config
         self.secret_store = secret_store
+        self.model = _require_config_string(model, "model")
+        self.timeout_seconds = _require_positive_int(timeout_seconds, "timeout_seconds")
+        self.responses_config = OpenAiResponsesConfig() if responses_config is None else responses_config
 
     def complete_after_capability_check(self, request: LlmRequest) -> LlmResponse:
-        effective_request = _request_with_default_model(request, self.config.default_model)
-        if effective_request.model is None:
-            raise LlmConfigurationError("openai_api model is required")
         api_key = resolve_openai_api_key(self.auth_config, self.secret_store)
-        request_payload = build_openai_response_request(effective_request)
+        request_payload = build_openai_response_request(
+            request,
+            model=self.model,
+            responses_config=self.responses_config,
+        )
         call_result = self._create_response(
             request_payload,
             api_key=api_key,
-            timeout_seconds=effective_request.timeout_seconds,
+            timeout_seconds=self.timeout_seconds,
         )
         output_value = parse_openai_response_output(call_result.payload)
-        _validate_output_schema(effective_request, output_value)
+        _validate_output_schema(request, output_value)
         return build_openai_llm_response(
-            effective_request,
+            request,
             call_result.payload,
             call_result.timing,
+            model=self.model,
             output_value=output_value,
         )
 
@@ -166,26 +209,43 @@ class OpenAiApiClient(ProviderClientBase):
             raise LlmTimeoutError("openai_api request timed out") from exc
 
 
-def build_openai_response_request(request: LlmRequest) -> JsonObject:
-    if request.model is None:
-        raise LlmConfigurationError("openai_api model is required")
-    return {
-        "model": request.model,
+def build_openai_response_request(
+    request: LlmRequest,
+    *,
+    model: str,
+    responses_config: OpenAiResponsesConfig | None = None,
+) -> JsonObject:
+    _require_config_string(model, "model")
+    config = OpenAiResponsesConfig() if responses_config is None else responses_config
+    text_config: JsonObject = {
+        "format": {
+            "type": "json_schema",
+            "name": request.output.name,
+            "schema": dict(request.output.schema),
+            "strict": request.output.strict,
+        }
+    }
+    if config.text_verbosity is not None:
+        text_verbosity = cast(OpenAiTextVerbosity, config.text_verbosity)
+        text_config["verbosity"] = text_verbosity.value
+    payload: JsonObject = {
+        "model": model,
         "instructions": request.instructions,
         "input": [_message_to_input(message) for message in request.input],
-        "text": {
-            "format": {
-                "type": "json_schema",
-                "name": request.output.name,
-                "schema": dict(request.output.schema),
-                "strict": request.output.strict,
-            }
-        },
+        "text": text_config,
         "metadata": {
             "curio_request_id": request.request_id,
             "curio_workflow": request.workflow,
         },
     }
+    if config.temperature is not None:
+        payload["temperature"] = config.temperature
+    if config.max_output_tokens is not None:
+        payload["max_output_tokens"] = config.max_output_tokens
+    if config.reasoning_effort is not None:
+        reasoning_effort = cast(OpenAiReasoningEffort, config.reasoning_effort)
+        payload["reasoning"] = {"effort": reasoning_effort.value}
+    return payload
 
 
 def parse_openai_response_output(payload: Mapping[str, JsonValue]) -> JsonValue:
@@ -209,6 +269,7 @@ def build_openai_llm_response(
     payload: Mapping[str, JsonValue],
     timing: ProviderCallTiming,
     *,
+    model: str,
     output_value: JsonValue,
 ) -> LlmResponse:
     usage_payload = _optional_mapping(payload.get("usage"))
@@ -231,7 +292,7 @@ def build_openai_llm_response(
     return build_json_llm_response(
         request,
         provider=ProviderName.OPENAI_API,
-        model=_optional_string(payload.get("model")) or request.model,
+        model=_optional_string(payload.get("model")) or model,
         output_value=output_value,
         usage=usage,
     )
@@ -243,12 +304,6 @@ def _message_to_input(message: LlmMessage) -> JsonObject:
         "role": role.value,
         "content": [{"type": "input_text", "text": part.text} for part in message.content],
     }
-
-
-def _request_with_default_model(request: LlmRequest, default_model: str | None) -> LlmRequest:
-    if request.model is not None or default_model is None:
-        return request
-    return replace(request, model=default_model)
 
 
 def _validate_output_schema(request: LlmRequest, output_value: JsonValue) -> None:
@@ -316,6 +371,55 @@ def _require_string(value: object, field_name: str) -> str:
         raise LlmInvalidOutputError(f"{field_name} must be a string")
     if not value.strip():
         raise LlmInvalidOutputError(f"{field_name} must not be empty")
+    return value
+
+
+def _require_config_string(value: object, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a string")
+    if not value.strip():
+        raise ValueError(f"{field_name} must not be empty")
+    return value
+
+
+def _coerce_optional_str_enum[StrEnumT: StrEnum](
+    value: object,
+    field_name: str,
+    enum_type: type[StrEnumT],
+) -> StrEnumT | None:
+    if value is None:
+        return None
+    if isinstance(value, enum_type):
+        return value
+    value = _require_config_string(value, field_name)
+    try:
+        return enum_type(value)
+    except ValueError as exc:
+        allowed_values = ", ".join(member.value for member in enum_type)
+        raise ValueError(f"{field_name} must be one of: {allowed_values}") from exc
+
+
+def _require_positive_int(value: object, field_name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a positive integer")
+    if value < 1:
+        raise ValueError(f"{field_name} must be a positive integer")
+    return value
+
+
+def _require_optional_positive_int(value: object, field_name: str) -> int | None:
+    if value is None:
+        return None
+    return _require_positive_int(value, field_name)
+
+
+def _require_optional_temperature(value: object, field_name: str) -> float | int | None:
+    if value is None:
+        return None
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a number between 0 and 2")
+    if not 0 <= value <= 2:
+        raise ValueError(f"{field_name} must be a number between 0 and 2")
     return value
 
 

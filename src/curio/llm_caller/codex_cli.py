@@ -2,7 +2,8 @@ import json
 import subprocess
 import tempfile
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -48,6 +49,20 @@ CODEX_CLI_CAPABILITIES = (
 )
 
 
+class CodexCliReasoningEffort(StrEnum):
+    MINIMAL = "minimal"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    XHIGH = "xhigh"
+
+
+class CodexCliVerbosity(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
 @dataclass(frozen=True, slots=True)
 class CodexCliExecConfig:
     executable: str = CODEX_CLI_DEFAULT_EXECUTABLE
@@ -57,12 +72,28 @@ class CodexCliExecConfig:
     json_events: bool = True
     skip_git_repo_check: bool = False
     ignore_user_config: bool = False
+    model_reasoning_effort: CodexCliReasoningEffort | str | None = None
+    model_verbosity: CodexCliVerbosity | str | None = None
     extra_config: Sequence[str] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         _require_config_string(self.executable, "executable")
         _require_config_string(self.sandbox, "sandbox")
         _require_config_string(self.color, "color")
+        object.__setattr__(
+            self,
+            "model_reasoning_effort",
+            _coerce_optional_str_enum(
+                self.model_reasoning_effort,
+                "model_reasoning_effort",
+                CodexCliReasoningEffort,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "model_verbosity",
+            _coerce_optional_str_enum(self.model_verbosity, "model_verbosity", CodexCliVerbosity),
+        )
         for override in self.extra_config:
             _require_config_string(override, "config override")
         object.__setattr__(self, "extra_config", tuple(self.extra_config))
@@ -136,14 +167,14 @@ class CodexCliClient(ProviderClientBase):
         exec_config: CodexCliExecConfig,
         auth_config: CodexCliAuthConfig,
         working_directory: Path,
+        model: str,
+        timeout_seconds: int,
         output_schema_dir: Path | None = None,
-        default_model: str | None = None,
     ) -> None:
         super().__init__(
             ProviderClientConfig(
                 provider=ProviderName.CODEX_CLI,
                 capabilities=CODEX_CLI_CAPABILITIES,
-                default_model=default_model,
             )
         )
         self.runner = runner
@@ -152,33 +183,33 @@ class CodexCliClient(ProviderClientBase):
         if not isinstance(working_directory, Path):
             raise ValueError("working_directory must be a path")
         self.working_directory = working_directory
+        self.model = _require_config_string(model, "model")
+        self.timeout_seconds = _require_positive_int(timeout_seconds, "timeout_seconds")
         self.output_schema_dir = output_schema_dir
 
     def complete_after_capability_check(self, request: LlmRequest) -> LlmResponse:
         _validate_codex_auth_config(self.auth_config)
-        effective_request = _request_with_default_model(request, self.config.default_model)
-        if effective_request.model is None:
-            raise LlmConfigurationError("codex_cli model is required")
         schema_parent = None if self.output_schema_dir is None else str(self.output_schema_dir)
         with tempfile.TemporaryDirectory(dir=schema_parent) as schema_dir:
             output_schema_path = Path(schema_dir) / "output.schema.json"
-            _write_output_schema(effective_request, output_schema_path)
+            _write_output_schema(request, output_schema_path)
             command = build_codex_exec_command(
-                effective_request,
+                request,
+                model=self.model,
                 output_schema_path=output_schema_path,
                 config=self.exec_config,
                 working_directory=self.working_directory,
             )
-            run_result = self._run(command, timeout_seconds=effective_request.timeout_seconds)
+            run_result = self._run(command, timeout_seconds=self.timeout_seconds)
         if run_result.return_code != 0:
             raise LlmRejectedRequestError(f"codex_cli subprocess exited with status {run_result.return_code}")
         exec_result = parse_codex_exec_jsonl(run_result.stdout)
-        _validate_output_schema(effective_request, exec_result.output_value)
+        _validate_output_schema(request, exec_result.output_value)
         return build_codex_llm_response(
-            effective_request,
+            request,
             exec_result,
             run_result.timing,
-            model=effective_request.model,
+            model=self.model,
         )
 
     def _run(self, command: CodexCliCommand, *, timeout_seconds: int) -> CodexCliRunResult:
@@ -193,12 +224,14 @@ class CodexCliClient(ProviderClientBase):
 def build_codex_exec_command(
     request: LlmRequest,
     *,
+    model: str,
     output_schema_path: Path,
     config: CodexCliExecConfig,
     working_directory: Path,
 ) -> CodexCliCommand:
     if not isinstance(working_directory, Path):
         raise ValueError("working_directory must be a path")
+    _require_config_string(model, "model")
     argv = [config.executable, "exec"]
     if config.json_events:
         argv.append("--json")
@@ -212,10 +245,15 @@ def build_codex_exec_command(
     argv.extend(["--color", config.color])
     argv.extend(["--output-schema", str(output_schema_path)])
     argv.extend(["--cd", str(working_directory)])
+    if config.model_reasoning_effort is not None:
+        model_reasoning_effort = cast(CodexCliReasoningEffort, config.model_reasoning_effort)
+        argv.extend(["--config", f'model_reasoning_effort="{model_reasoning_effort.value}"'])
+    if config.model_verbosity is not None:
+        model_verbosity = cast(CodexCliVerbosity, config.model_verbosity)
+        argv.extend(["--config", f'model_verbosity="{model_verbosity.value}"'])
     for override in config.extra_config:
         argv.extend(["--config", override])
-    if request.model is not None:
-        argv.extend(["--model", request.model])
+    argv.extend(["--model", model])
     argv.append("-")
     return CodexCliCommand(argv=tuple(argv), stdin_text=build_codex_exec_prompt(request))
 
@@ -314,12 +352,6 @@ def _validate_codex_auth_config(auth_config: CodexCliAuthConfig) -> None:
     mode = cast(CodexCliAuthMode, auth_config.mode)
     if mode == CodexCliAuthMode.API_KEY:
         raise LlmConfigurationError("codex_cli API-key handoff is not implemented")
-
-
-def _request_with_default_model(request: LlmRequest, default_model: str | None) -> LlmRequest:
-    if request.model is not None or default_model is None:
-        return request
-    return replace(request, model=default_model)
 
 
 def _write_output_schema(request: LlmRequest, output_schema_path: Path) -> None:
@@ -433,6 +465,31 @@ def _require_config_string(value: object, field_name: str) -> str:
         raise ValueError(f"{field_name} must be a string")
     if not value.strip():
         raise ValueError(f"{field_name} must not be empty")
+    return value
+
+
+def _coerce_optional_str_enum[StrEnumT: StrEnum](
+    value: object,
+    field_name: str,
+    enum_type: type[StrEnumT],
+) -> StrEnumT | None:
+    if value is None:
+        return None
+    if isinstance(value, enum_type):
+        return value
+    value = _require_config_string(value, field_name)
+    try:
+        return enum_type(value)
+    except ValueError as exc:
+        allowed_values = ", ".join(member.value for member in enum_type)
+        raise ValueError(f"{field_name} must be one of: {allowed_values}") from exc
+
+
+def _require_positive_int(value: object, field_name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a positive integer")
+    if value < 1:
+        raise ValueError(f"{field_name} must be a positive integer")
     return value
 
 

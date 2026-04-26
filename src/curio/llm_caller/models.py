@@ -93,14 +93,6 @@ def _require_string(value: object, field_name: str) -> str:
     return value
 
 
-def _require_positive_int(value: object, field_name: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise ValueError(f"{field_name} must be a positive integer")
-    if value < 1:
-        raise ValueError(f"{field_name} must be a positive integer")
-    return value
-
-
 def _require_non_negative_number(value: object, field_name: str) -> float | int:
     if not isinstance(value, int | float) or isinstance(value, bool):
         raise ValueError(f"{field_name} must be a non-negative number")
@@ -241,25 +233,20 @@ class JsonSchemaOutput:
 class LlmRequest:
     request_id: str
     workflow: str
-    model: str | None
     instructions: str
     input: Sequence[LlmMessage]
     output: JsonSchemaOutput
     required_capabilities: Sequence[LlmCapability | str] = field(default_factory=tuple)
-    timeout_seconds: int = 300
     metadata: Mapping[str, JsonValue] = field(default_factory=dict)
     llm_request_version: str = field(default=LLM_REQUEST_VERSION, init=False)
 
     def __post_init__(self) -> None:
         _require_string(self.request_id, "request_id")
         _require_string(self.workflow, "workflow")
-        if self.model is not None:
-            _require_string(self.model, "model")
         _require_string(self.instructions, "instructions")
         input_messages = tuple(self.input)
         if not input_messages:
             raise ValueError("input must not be empty")
-        _require_positive_int(self.timeout_seconds, "timeout_seconds")
         object.__setattr__(self, "input", input_messages)
         object.__setattr__(self, "required_capabilities", _coerce_capabilities(self.required_capabilities))
         object.__setattr__(self, "metadata", dict(_require_mapping(self.metadata, "metadata")))
@@ -271,7 +258,6 @@ class LlmRequest:
         return cls(
             request_id=_require_string(_require_field(payload, "request_id"), "request_id"),
             workflow=_require_string(_require_field(payload, "workflow"), "workflow"),
-            model=cast(str | None, _require_field(payload, "model")),
             instructions=_require_string(_require_field(payload, "instructions"), "instructions"),
             input=[
                 LlmMessage.from_json(message)
@@ -285,7 +271,6 @@ class LlmRequest:
                     "required_capabilities",
                 )
             ],
-            timeout_seconds=_require_positive_int(_require_field(payload, "timeout_seconds"), "timeout_seconds"),
             metadata=_require_mapping(_require_field(payload, "metadata"), "metadata"),
         )
 
@@ -295,12 +280,10 @@ class LlmRequest:
             "llm_request_version": self.llm_request_version,
             "request_id": self.request_id,
             "workflow": self.workflow,
-            "model": self.model,
             "instructions": self.instructions,
             "input": [message.to_json() for message in self.input],
             "output": self.output.to_json(),
             "required_capabilities": [capability.value for capability in required_capabilities],
-            "timeout_seconds": self.timeout_seconds,
             "metadata": dict(self.metadata),
         }
 

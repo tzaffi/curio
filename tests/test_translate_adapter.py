@@ -4,7 +4,6 @@ from curio.llm_caller import LlmCapability, LlmMessageRole
 from curio.schemas import SchemaName, load_schema, validate_json
 from curio.translate import Block, TranslationRequest
 from curio.translate.adapter import (
-    DEFAULT_TRANSLATION_TIMEOUT_SECONDS,
     TRANSLATION_INSTRUCTIONS,
     TRANSLATION_MODEL_OUTPUT_SCHEMA_NAME,
     TRANSLATION_WORKFLOW,
@@ -16,9 +15,7 @@ from curio.translate.adapter import (
 
 def make_request(
     *,
-    provider: str | None = "codex_cli",
-    model: str | None = "gpt-test",
-    timeout_seconds: int | None = 120,
+    llm_caller: str | None = "codex_gpt_55",
 ) -> TranslationRequest:
     return TranslationRequest(
         request_id="translate-test",
@@ -31,9 +28,7 @@ def make_request(
                 context={"artifact_kind": "tweet_json"},
             )
         ],
-        provider=provider,
-        model=model,
-        timeout_seconds=timeout_seconds,
+        llm_caller=llm_caller,
     )
 
 
@@ -73,16 +68,14 @@ def test_build_translation_llm_request_maps_translation_request() -> None:
 
     assert llm_request.request_id == "translate-test"
     assert llm_request.workflow == TRANSLATION_WORKFLOW
-    assert llm_request.model == "gpt-test"
     assert llm_request.instructions == TRANSLATION_INSTRUCTIONS
     assert llm_request.required_capabilities == (
         LlmCapability.TEXT_GENERATION,
         LlmCapability.JSON_SCHEMA_OUTPUT,
     )
-    assert llm_request.timeout_seconds == 120
     assert llm_request.metadata == {
         "source": "curio.translate",
-        "provider": "codex_cli",
+        "llm_caller": "codex_gpt_55",
     }
     assert llm_request.input[0].role == LlmMessageRole.USER
     assert llm_request.input[0].content[0].text == build_translation_prompt(request)
@@ -92,14 +85,12 @@ def test_build_translation_llm_request_maps_translation_request() -> None:
     validate_json(payload, SchemaName.LLM_REQUEST)
 
 
-def test_build_translation_llm_request_uses_default_timeout_and_preserves_nulls() -> None:
-    request = make_request(provider=None, model=None, timeout_seconds=None)
+def test_build_translation_llm_request_preserves_null_llm_caller_metadata() -> None:
+    request = make_request(llm_caller=None)
 
     llm_request = build_translation_llm_request(request)
 
-    assert llm_request.model is None
-    assert llm_request.timeout_seconds == DEFAULT_TRANSLATION_TIMEOUT_SECONDS
     assert llm_request.metadata == {
         "source": "curio.translate",
-        "provider": None,
+        "llm_caller": None,
     }

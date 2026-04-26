@@ -1,6 +1,12 @@
 {
-  "providers": {
-    "codex_cli": {
+  "translate": {
+    "llm_caller": "codex_gpt_54_mini"
+  },
+  "llm_callers": {
+    "codex_gpt_55": {
+      "provider": "codex_cli",
+      "model": "gpt-5.5",
+      "timeout_seconds": 300,
       "auth": {
         "provider": "codex_cli",
         "mode": "chatgpt",
@@ -15,6 +21,31 @@
         "json_events": true,
         "skip_git_repo_check": false,
         "ignore_user_config": false,
+        "model_reasoning_effort": "low",
+        "model_verbosity": null,
+        "extra_config": []
+      }
+    },
+    "codex_gpt_54_mini": {
+      "provider": "codex_cli",
+      "model": "gpt-5.4-mini",
+      "timeout_seconds": 300,
+      "auth": {
+        "provider": "codex_cli",
+        "mode": "chatgpt",
+        "api_key_ref": null,
+        "require_keyring_credentials_store": true
+      },
+      "exec": {
+        "executable": "codex",
+        "sandbox": "read-only",
+        "color": "never",
+        "ephemeral": true,
+        "json_events": true,
+        "skip_git_repo_check": false,
+        "ignore_user_config": false,
+        "model_reasoning_effort": "minimal",
+        "model_verbosity": "low",
         "extra_config": []
       }
     }
