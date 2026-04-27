@@ -9,6 +9,7 @@ import curio.cli as cli
 from curio.cli import app
 from curio.config import LlmCallerPromptConfig, TranslateConfig
 from curio.llm_caller import (
+    LlmCostEstimate,
     LlmOutput,
     LlmProviderNotFoundError,
     LlmRequest,
@@ -42,6 +43,7 @@ class FakeCurioConfig:
         class FakeCallerConfig:
             def __init__(self, prompt_config: LlmCallerPromptConfig | None) -> None:
                 self.prompt_config = prompt_config
+                self.pricing_config = None
 
         return FakeCallerConfig(self.prompt_configs.get(name))
 
@@ -67,10 +69,12 @@ class FakeTranslationService:
         *,
         warnings: Sequence[str] = (),
         block_warnings: Sequence[str] = (),
+        cost_estimate: LlmCostEstimate | None = None,
     ) -> None:
         self.requests: list[TranslationRequest] = []
         self.warnings = tuple(warnings)
         self.block_warnings = tuple(block_warnings)
+        self.cost_estimate = cost_estimate
 
     def translate(self, request: TranslationRequest) -> TranslationResponse:
         self.requests.append(request)
@@ -81,6 +85,7 @@ class FakeTranslationService:
                 provider=ProviderName.OPENAI_API if "openai" in (request.llm_caller or "") else ProviderName.CODEX_CLI,
                 model=request.llm_caller,
                 usage=make_usage(),
+                cost_estimate=self.cost_estimate,
             ),
             warnings=self.warnings,
         )
@@ -475,7 +480,11 @@ def test_translate_raw_english_text_prints_original_text(monkeypatch: pytest.Mon
 
 
 def test_translate_raw_text_json_output_includes_warnings(monkeypatch: pytest.MonkeyPatch) -> None:
-    service = FakeTranslationService(warnings=["provider warning"], block_warnings=["block warning"])
+    service = FakeTranslationService(
+        warnings=["provider warning"],
+        block_warnings=["block warning"],
+        cost_estimate=LlmCostEstimate("USD", "api_equivalent", 0.000026, 0.75, 0.075, 4.5),
+    )
     install_fake_service(monkeypatch, service)
 
     result = runner.invoke(app, ["translate", "--llm-caller", "translator_codex_gpt_55", "--json", "bonjour"])
@@ -486,18 +495,59 @@ def test_translate_raw_text_json_output_includes_warnings(monkeypatch: pytest.Mo
     assert payload["warnings"] == ["provider warning"]
     assert payload["blocks"][0]["warnings"] == ["block warning"]
     assert payload["blocks"][0]["translated_text"] == "Hello"
+    assert payload["llm"]["cost_estimate"]["amount"] == 0.000026
 
 
-def test_translate_raw_text_non_json_emits_warnings_to_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_translate_raw_text_non_json_emits_formatted_warnings_to_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
     service = FakeTranslationService(warnings=["provider warning"], block_warnings=["block warning"])
     install_fake_service(monkeypatch, service)
 
     result = runner.invoke(app, ["translate", "--llm-caller", "translator_codex_gpt_55", "bonjour"])
 
     assert result.exit_code == 0
-    assert "provider warning" in result.output
-    assert "block warning" in result.output
+    assert "[WARNINGS: provider warning]" in result.output
+    assert "[WARNINGS: block warning]" in result.output
     assert "Hello" in result.output
+
+
+def test_translate_raw_text_can_suppress_human_warnings(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = FakeTranslationService(warnings=["provider warning"], block_warnings=["block warning"])
+    install_fake_service(monkeypatch, service)
+
+    result = runner.invoke(
+        app,
+        ["translate", "--llm-caller", "translator_codex_gpt_55", "--suppress-warnings", "bonjour"],
+    )
+
+    assert result.exit_code == 0
+    assert result.output == "Hello\n"
+
+
+def test_translate_raw_text_stats_emits_usage_and_cost_to_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = FakeTranslationService(
+        cost_estimate=LlmCostEstimate("USD", "api_equivalent", 0.000026, 0.75, 0.075, 4.5),
+    )
+    install_fake_service(monkeypatch, service)
+
+    result = runner.invoke(app, ["translate", "--llm-caller", "translator_codex_gpt_55", "--stats", "bonjour"])
+
+    assert result.exit_code == 0
+    assert "Hello\n" in result.output
+    assert "[STATS: provider=codex_cli model=translator_codex_gpt_55" in result.output
+    assert "input_tokens=10" in result.output
+    assert "cached_input_tokens=unavailable" in result.output
+    assert "output_tokens=4" in result.output
+    assert "cost=USD 0.000026 (api_equivalent)" in result.output
+
+
+def test_translate_raw_text_stats_reports_unavailable_cost(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = FakeTranslationService()
+    install_fake_service(monkeypatch, service)
+
+    result = runner.invoke(app, ["translate", "--llm-caller", "translator_codex_gpt_55", "--stats", "bonjour"])
+
+    assert result.exit_code == 0
+    assert "cost=unavailable" in result.output
 
 
 def test_translate_reads_raw_text_from_stdin(monkeypatch: pytest.MonkeyPatch) -> None:

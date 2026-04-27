@@ -119,6 +119,8 @@ def make_case() -> SmokeCase:
 
 def make_pricing() -> ModelPricing:
     return ModelPricing(
+        currency="USD",
+        basis="api_equivalent",
         input_price_per_million=0.75,
         cached_input_price_per_million=0.075,
         output_price_per_million=4.5,
@@ -219,7 +221,10 @@ def test_build_smoke_translation_service_passes_prompt_config_to_service() -> No
     response = service.translate(make_request())
 
     assert service.prompt_config == caller_config.prompt_config
+    assert service.pricing_config == caller_config.pricing_config
     assert response.blocks[0].translated_text == "Hello."
+    assert response.llm.cost_estimate is not None
+    assert response.llm.cost_estimate.amount == pytest.approx(0.0002115)
     assert client.requests[0].metadata["llm_caller"] == "translator_codex_gpt_54_mini"
 
 
@@ -232,12 +237,14 @@ def test_api_equivalent_cost_and_usage_payload_handle_missing_token_counts() -> 
     usage = make_usage(input_tokens=None, cached_input_tokens=None, output_tokens=None)
 
     assert api_equivalent_cost_usd(make_usage(), pricing) == pytest.approx(0.0002115)
-    assert api_equivalent_cost_usd(usage, pricing) == 0
+    assert api_equivalent_cost_usd(usage, pricing) is None
     assert usage_payload(make_usage(), pricing) == {
         "input_tokens": 100,
         "cached_input_tokens": 20,
         "output_tokens": 30,
         "reasoning_tokens": 5,
+        "currency": "USD",
+        "basis": "api_equivalent",
         "input_price_per_million": 0.75,
         "cached_input_price_per_million": 0.075,
         "output_price_per_million": 4.5,
@@ -255,7 +262,13 @@ def test_smoke_config_models_reject_invalid_values() -> None:
     with pytest.raises(ValueError, match="preservation requirement"):
         SmokeCase(case_id="case", source_text="x", expected_translation_intent="x", preservation_requirements=("",))
     with pytest.raises(ValueError, match="input_price_per_million"):
-        ModelPricing(input_price_per_million=-1, cached_input_price_per_million=0, output_price_per_million=0)
+        ModelPricing(
+            currency="USD",
+            basis="api_equivalent",
+            input_price_per_million=-1,
+            cached_input_price_per_million=0,
+            output_price_per_million=0,
+        )
 
 
 def test_redacted_caller_summary_includes_no_secret_values() -> None:

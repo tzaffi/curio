@@ -111,6 +111,10 @@ V1 flags:
   Read the structured JSON request defined in [TRANSLATE.md](TRANSLATE.md).
 - `--json`
   Print the full structured translation response.
+- `--suppress-warnings`
+  Do not print translation warnings to stderr in non-JSON mode.
+- `--stats`
+  Print provider, model, token usage, wall time, and cost-estimate metadata to stderr in non-JSON mode.
 - `--output PATH`
   Write command output to a file instead of stdout.
 - `--source-language LANG`
@@ -137,6 +141,16 @@ For raw single-block input without `--json`, stdout should contain only the tran
 For structured input or when `--json` is set, stdout should contain the full translation response JSON defined in [TRANSLATE.md](TRANSLATE.md).
 
 Warnings and diagnostics belong on stderr unless `--json` is active. In JSON mode, warnings belong in the response object.
+In non-JSON mode, warnings should be visibly prefixed:
+
+```text
+[WARNINGS: warning text]
+```
+
+When terminal color is supported, warning lines should be red. `--suppress-warnings`
+suppresses this human stderr output only; it must not remove warnings from JSON
+responses. `--stats` prints usage and cost metadata to stderr and must not add
+metadata to plain translation stdout.
 
 ### Exit Codes
 

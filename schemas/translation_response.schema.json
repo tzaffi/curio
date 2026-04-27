@@ -154,7 +154,8 @@
       "required": [
         "provider",
         "model",
-        "usage"
+        "usage",
+        "cost_estimate"
       ],
       "properties": {
         "provider": {
@@ -169,6 +170,52 @@
         },
         "usage": {
           "$ref": "#/$defs/llmUsage"
+        },
+        "cost_estimate": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/costEstimate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "costEstimate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "currency",
+        "basis",
+        "amount",
+        "input_price_per_million",
+        "cached_input_price_per_million",
+        "output_price_per_million"
+      ],
+      "properties": {
+        "currency": {
+          "const": "USD"
+        },
+        "basis": {
+          "const": "api_equivalent"
+        },
+        "amount": {
+          "type": "number",
+          "minimum": 0
+        },
+        "input_price_per_million": {
+          "type": "number",
+          "minimum": 0
+        },
+        "cached_input_price_per_million": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_price_per_million": {
+          "type": "number",
+          "minimum": 0
         }
       }
     },

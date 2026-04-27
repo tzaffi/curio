@@ -4,7 +4,13 @@ from pathlib import Path
 from typing import Any, cast
 
 from curio.config import ConfigError, CurioConfig, LlmCallerConfig, load_config
-from curio.llm_caller import LlmClient, LlmUsage, ProviderName
+from curio.llm_caller import (
+    LlmClient,
+    LlmPricing,
+    LlmUsage,
+    ProviderName,
+    estimate_llm_cost,
+)
 from curio.llm_caller.codex_cli import CodexCliExecConfig
 from curio.translate.models import JsonObject, TranslationRequest, TranslationResponse
 from curio.translate.service import TranslationService
@@ -31,16 +37,7 @@ class SmokeCase:
             _require_non_empty_string(requirement, "preservation requirement")
 
 
-@dataclass(frozen=True, slots=True)
-class ModelPricing:
-    input_price_per_million: float
-    cached_input_price_per_million: float
-    output_price_per_million: float
-
-    def __post_init__(self) -> None:
-        _require_non_negative_number(self.input_price_per_million, "input_price_per_million")
-        _require_non_negative_number(self.cached_input_price_per_million, "cached_input_price_per_million")
-        _require_non_negative_number(self.output_price_per_million, "output_price_per_million")
+ModelPricing = LlmPricing
 
 
 def select_codex_smoke_caller(
@@ -65,6 +62,7 @@ def build_smoke_translation_service(llm_client: LlmClient, caller_config: LlmCal
     return TranslationService(
         llm_client=llm_client,
         prompt_config=caller_config.prompt_config,
+        pricing_config=caller_config.pricing_config,
     )
 
 
@@ -79,15 +77,9 @@ def render_translation_text(request: TranslationRequest, response: TranslationRe
     return "\n\n".join(rendered_blocks)
 
 
-def api_equivalent_cost_usd(usage: LlmUsage, pricing: ModelPricing) -> float:
-    input_tokens = _number_or_zero(usage.input_tokens)
-    cached_input_tokens = _number_or_zero(usage.cached_input_tokens)
-    output_tokens = _number_or_zero(usage.output_tokens)
-    return (
-        input_tokens * pricing.input_price_per_million
-        + cached_input_tokens * pricing.cached_input_price_per_million
-        + output_tokens * pricing.output_price_per_million
-    ) / 1_000_000
+def api_equivalent_cost_usd(usage: LlmUsage, pricing: ModelPricing) -> float | None:
+    estimate = estimate_llm_cost(usage, pricing)
+    return None if estimate is None else estimate.amount
 
 
 def usage_payload(usage: LlmUsage, pricing: ModelPricing) -> JsonObject:
@@ -96,6 +88,8 @@ def usage_payload(usage: LlmUsage, pricing: ModelPricing) -> JsonObject:
         "cached_input_tokens": usage.cached_input_tokens,
         "output_tokens": usage.output_tokens,
         "reasoning_tokens": usage.reasoning_tokens,
+        "currency": pricing.currency,
+        "basis": pricing.basis,
         "input_price_per_million": pricing.input_price_per_million,
         "cached_input_price_per_million": pricing.cached_input_price_per_million,
         "output_price_per_million": pricing.output_price_per_million,
@@ -232,15 +226,6 @@ def _write_json(path: Path, payload: MappingPayload) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
 
-def _number_or_zero(value: float | int | None) -> float | int:
-    return 0 if value is None else value
-
-
 def _require_non_empty_string(value: object, name: str) -> None:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be a non-empty string")
-
-
-def _require_non_negative_number(value: object, name: str) -> None:
-    if not isinstance(value, int | float) or isinstance(value, bool) or value < 0:
-        raise ValueError(f"{name} must be a non-negative number")

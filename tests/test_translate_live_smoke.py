@@ -20,7 +20,6 @@ from curio.llm_caller import (
 )
 from curio.translate import Block, TranslationError, TranslationRequest
 from live_smoke_helpers import (
-    ModelPricing,
     SmokeCase,
     build_smoke_translation_service,
     redacted_caller_summary,
@@ -41,23 +40,6 @@ CODEX_SMOKE_CALLERS = (
     "translator_codex_gpt_54",
     "translator_codex_gpt_55",
 )
-MODEL_PRICING_BY_CALLER = {
-    "translator_codex_gpt_54_mini": ModelPricing(
-        input_price_per_million=0.75,
-        cached_input_price_per_million=0.075,
-        output_price_per_million=4.50,
-    ),
-    "translator_codex_gpt_54": ModelPricing(
-        input_price_per_million=2.50,
-        cached_input_price_per_million=0.25,
-        output_price_per_million=15.00,
-    ),
-    "translator_codex_gpt_55": ModelPricing(
-        input_price_per_million=5.00,
-        cached_input_price_per_million=0.50,
-        output_price_per_million=30.00,
-    ),
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -306,6 +288,7 @@ def test_live_codex_cli_translate_case_matrix(
     caller: str,
 ) -> None:
     config, caller_config = select_codex_smoke_caller(CONFIG_PATH, caller)
+    assert caller_config.pricing_config is not None
     service = build_smoke_translation_service(
         build_llm_caller_client(
             caller,
@@ -342,7 +325,7 @@ def test_live_codex_cli_translate_case_matrix(
         caller_config=caller_config,
         request=request,
         response=response,
-        pricing=MODEL_PRICING_BY_CALLER[caller],
+        pricing=caller_config.pricing_config,
     )
     assert response.request_id == request.request_id
     assert response.llm.provider == ProviderName.CODEX_CLI

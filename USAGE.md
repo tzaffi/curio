@@ -41,6 +41,7 @@ Important fields:
 - `llm_callers.NAME.timeout_seconds`: provider-call wall-clock timeout
 - `llm_callers.NAME.prompt.instructions`: optional translator instructions template
 - `llm_callers.NAME.prompt.user`: optional translator user prompt template
+- `llm_callers.NAME.pricing`: optional API-equivalent pricing for cost estimates
 - `llm_callers.NAME.auth.mode`: use `chatgpt` for normal ChatGPT-plan login
 - `llm_callers.NAME.exec.model_reasoning_effort`: optional Codex reasoning effort
 - `llm_callers.NAME.exec.model_verbosity`: optional Codex verbosity
@@ -66,6 +67,7 @@ Important fields:
 - `llm_callers.NAME.timeout_seconds`: provider-call wall-clock timeout
 - `llm_callers.NAME.prompt.instructions`: optional translator instructions template
 - `llm_callers.NAME.prompt.user`: optional translator user prompt template
+- `llm_callers.NAME.pricing`: optional API-equivalent pricing for cost estimates
 - `llm_callers.NAME.auth.api_key_ref.service`
 - `llm_callers.NAME.auth.api_key_ref.account`
 - `llm_callers.NAME.responses.temperature`
@@ -91,6 +93,40 @@ Run a translation:
 ```bash
 uv run curio translate "bonjour"
 ```
+
+## Pricing Values
+
+Pricing is optional. Curio uses it only to compute local cost estimates from
+provider token usage. The estimate is not a billing statement. This distinction
+matters especially for `codex_cli` callers that use ChatGPT auth: Curio can show
+an API-equivalent estimate, but the run is not literally billed through the API.
+
+Use the official OpenAI API pricing page as the source for these fields:
+<https://openai.com/api/pricing/>
+
+Model-specific API docs can be cross-checked here:
+<https://developers.openai.com/api/docs/models>
+
+Configured pricing lives under each named caller:
+
+```json
+{
+  "llm_callers": {
+    "translator_codex_gpt_55": {
+      "pricing": {
+        "currency": "USD",
+        "basis": "api_equivalent",
+        "input_price_per_million": 5.0,
+        "cached_input_price_per_million": 0.5,
+        "output_price_per_million": 30.0
+      }
+    }
+  }
+}
+```
+
+If pricing is omitted, translation JSON still includes `llm.usage`, but
+`llm.cost_estimate` is `null` and `--stats` reports cost as unavailable.
 
 ## Custom Config Path
 

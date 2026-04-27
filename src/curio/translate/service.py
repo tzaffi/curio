@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 from curio.config import LlmCallerPromptConfig
-from curio.llm_caller import LlmClient
+from curio.llm_caller import LlmClient, LlmPricing, estimate_llm_cost
 from curio.translate.adapter import build_translation_llm_request
 from curio.translate.models import (
     LlmSummary,
@@ -15,6 +15,7 @@ from curio.translate.validation import translated_blocks_from_llm_response
 class TranslationService:
     llm_client: LlmClient
     prompt_config: LlmCallerPromptConfig | None = None
+    pricing_config: LlmPricing | None = None
 
     def translate(self, request: TranslationRequest) -> TranslationResponse:
         llm_request = build_translation_llm_request(request, self.prompt_config)
@@ -27,6 +28,7 @@ class TranslationService:
                 provider=llm_response.provider,
                 model=llm_response.model,
                 usage=llm_response.usage,
+                cost_estimate=estimate_llm_cost(llm_response.usage, self.pricing_config),
             ),
             warnings=llm_response.warnings,
         )

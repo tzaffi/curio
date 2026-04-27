@@ -74,6 +74,7 @@ def _build_translation_service(
     return TranslationService(
         llm_client=_build_llm_caller_client(llm_caller, config_path, config=curio_config),
         prompt_config=caller_config.prompt_config,
+        pricing_config=caller_config.pricing_config,
     )
 
 
@@ -231,10 +232,40 @@ def _render_translation_output(
 
 def _emit_warnings(response: TranslationResponse) -> None:
     for warning in response.warnings:
-        typer.echo(warning, err=True)
+        typer.secho(f"[WARNINGS: {warning}]", fg=typer.colors.RED, err=True)
     for block in response.blocks:
         for warning in block.warnings:
-            typer.echo(warning, err=True)
+            typer.secho(f"[WARNINGS: {warning}]", fg=typer.colors.RED, err=True)
+
+
+def _stats_value(value: float | int | None) -> str:
+    return "unavailable" if value is None else str(value)
+
+
+def _cost_value(response: TranslationResponse) -> str:
+    cost = response.llm.cost_estimate
+    if cost is None:
+        return "unavailable"
+    return f"{cost.currency} {cost.amount:.6f} ({cost.basis})"
+
+
+def _emit_stats(response: TranslationResponse) -> None:
+    usage = response.llm.usage
+    typer.secho(
+        "[STATS: "
+        f"provider={response.llm.provider} "
+        f"model={response.llm.model or 'unavailable'} "
+        f"input_tokens={_stats_value(usage.input_tokens)} "
+        f"cached_input_tokens={_stats_value(usage.cached_input_tokens)} "
+        f"output_tokens={_stats_value(usage.output_tokens)} "
+        f"reasoning_tokens={_stats_value(usage.reasoning_tokens)} "
+        f"total_tokens={_stats_value(usage.total_tokens)} "
+        f"wall_seconds={usage.wall_seconds} "
+        f"cost={_cost_value(response)}"
+        "]",
+        fg=typer.colors.GREEN,
+        err=True,
+    )
 
 
 def _write_output(rendered_output: str, output: Path | None) -> None:
@@ -288,6 +319,11 @@ def translate(
         typer.Option("--input-json", help="Read a structured translation request JSON file."),
     ] = None,
     json_output: Annotated[bool, typer.Option("--json", help="Print the full translation response JSON.")] = False,
+    suppress_warnings: Annotated[
+        bool,
+        typer.Option("--suppress-warnings", help="Do not print translation warnings to stderr."),
+    ] = False,
+    stats: Annotated[bool, typer.Option("--stats", help="Print translation usage and cost metadata to stderr.")] = False,
     output: Annotated[Path | None, typer.Option("--output", help="Write output to a UTF-8 file.")] = None,
     config_path: Annotated[
         Path | None,
@@ -333,12 +369,14 @@ def translate(
         _fail_runtime(str(exc))
 
     structured_output = json_output or input_json is not None
-    if not structured_output:
+    if not structured_output and not suppress_warnings:
         _emit_warnings(response)
     _write_output(
         _render_translation_output(request, response, structured_output=structured_output),
         output,
     )
+    if not structured_output and stats:
+        _emit_stats(response)
 
 
 @app.command("curate")

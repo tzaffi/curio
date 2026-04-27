@@ -16,6 +16,7 @@ from curio.llm_caller import (
     CodexCliAuthMode,
     CodexCliReasoningEffort,
     CodexCliVerbosity,
+    LlmPricing,
     OpenAiApiAuthConfig,
     OpenAiReasoningEffort,
     OpenAiTextVerbosity,
@@ -56,6 +57,13 @@ def test_checked_in_codex_example_config_parses() -> None:
     assert caller_config.provider == ProviderName.CODEX_CLI
     assert caller_config.model == "gpt-5.5"
     assert caller_config.timeout_seconds == 300
+    assert caller_config.pricing_config == LlmPricing(
+        currency="USD",
+        basis="api_equivalent",
+        input_price_per_million=5.0,
+        cached_input_price_per_million=0.5,
+        output_price_per_million=30.0,
+    )
     assert isinstance(caller_config.auth_config, CodexCliAuthConfig)
     assert caller_config.auth_config.mode == CodexCliAuthMode.CHATGPT
     assert caller_config.auth_config.require_keyring_credentials_store is True
@@ -71,12 +79,26 @@ def test_checked_in_codex_example_config_parses() -> None:
 
     mini_config = config.llm_caller_config("translator_codex_gpt_54_mini")
     assert mini_config.model == "gpt-5.4-mini"
+    assert mini_config.pricing_config == LlmPricing(
+        currency="USD",
+        basis="api_equivalent",
+        input_price_per_million=0.75,
+        cached_input_price_per_million=0.075,
+        output_price_per_million=4.5,
+    )
     assert mini_config.codex_exec_config is not None
     assert mini_config.codex_exec_config.model_verbosity == CodexCliVerbosity.LOW
     assert_default_translation_prompt_config(mini_config.prompt_config)
 
     gpt54_config = config.llm_caller_config("translator_codex_gpt_54")
     assert gpt54_config.model == "gpt-5.4"
+    assert gpt54_config.pricing_config == LlmPricing(
+        currency="USD",
+        basis="api_equivalent",
+        input_price_per_million=2.5,
+        cached_input_price_per_million=0.25,
+        output_price_per_million=15.0,
+    )
     assert gpt54_config.codex_exec_config is not None
     assert gpt54_config.codex_exec_config.model_reasoning_effort == CodexCliReasoningEffort.LOW
     assert gpt54_config.codex_exec_config.model_verbosity == CodexCliVerbosity.MEDIUM
@@ -91,6 +113,13 @@ def test_checked_in_openai_example_config_parses() -> None:
     assert caller_config.provider == ProviderName.OPENAI_API
     assert caller_config.model == "gpt-5.4-mini"
     assert caller_config.timeout_seconds == 300
+    assert caller_config.pricing_config == LlmPricing(
+        currency="USD",
+        basis="api_equivalent",
+        input_price_per_million=0.75,
+        cached_input_price_per_million=0.075,
+        output_price_per_million=4.5,
+    )
     assert isinstance(caller_config.auth_config, OpenAiApiAuthConfig)
     assert caller_config.auth_config.api_key_ref.service == "curio/openai-api"
     assert caller_config.auth_config.api_key_ref.account == "default-api-key"
@@ -105,6 +134,13 @@ def test_checked_in_openai_example_config_parses() -> None:
     assert_default_translation_prompt_config(caller_config.prompt_config)
 
     gpt55_config = config.llm_caller_config("translator_openai_gpt_55")
+    assert gpt55_config.pricing_config == LlmPricing(
+        currency="USD",
+        basis="api_equivalent",
+        input_price_per_million=5.0,
+        cached_input_price_per_million=0.5,
+        output_price_per_million=30.0,
+    )
     assert_default_translation_prompt_config(gpt55_config.prompt_config)
 
 
@@ -149,6 +185,17 @@ def test_load_config_parses_optional_translate_config(tmp_path: Path) -> None:
     assert config.translate_config == TranslateConfig()
 
 
+def test_load_config_accepts_omitted_llm_caller_pricing(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    payload = json.loads((repo_root() / "config.example.codex_cli.json").read_text(encoding="utf-8"))
+    del payload["llm_callers"]["translator_codex_gpt_55"]["pricing"]
+    write_config(config_path, payload)
+
+    config = load_config(config_path)
+
+    assert config.llm_caller_config("translator_codex_gpt_55").pricing_config is None
+
+
 def test_load_config_rejects_invalid_translate_config(tmp_path: Path) -> None:
     config_path = tmp_path / "config.json"
     payload = json.loads((repo_root() / "config.example.codex_cli.json").read_text(encoding="utf-8"))
@@ -170,6 +217,39 @@ def test_load_config_rejects_invalid_translate_config(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigError, match="TranslateConfig"):
         CurioConfig(llm_callers={}, translate_config="bad")
+
+
+def test_load_config_rejects_invalid_llm_caller_pricing(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    payload = json.loads((repo_root() / "config.example.codex_cli.json").read_text(encoding="utf-8"))
+
+    payload["llm_callers"]["translator_codex_gpt_55"]["pricing"] = "bad"
+    write_config(config_path, payload)
+    with pytest.raises(ConfigError, match="pricing"):
+        load_config(config_path)
+
+    payload["llm_callers"]["translator_codex_gpt_55"]["pricing"] = {
+        "currency": "EUR",
+        "basis": "api_equivalent",
+        "input_price_per_million": 5.0,
+        "cached_input_price_per_million": 0.5,
+        "output_price_per_million": 30.0,
+    }
+    write_config(config_path, payload)
+    with pytest.raises(ConfigError, match="pricing.currency"):
+        load_config(config_path)
+
+    payload["llm_callers"]["translator_codex_gpt_55"]["pricing"]["currency"] = "USD"
+    payload["llm_callers"]["translator_codex_gpt_55"]["pricing"]["basis"] = "invoice"
+    write_config(config_path, payload)
+    with pytest.raises(ConfigError, match="pricing.basis"):
+        load_config(config_path)
+
+    payload["llm_callers"]["translator_codex_gpt_55"]["pricing"]["basis"] = "api_equivalent"
+    payload["llm_callers"]["translator_codex_gpt_55"]["pricing"]["input_price_per_million"] = -1
+    write_config(config_path, payload)
+    with pytest.raises(ConfigError, match="input_price_per_million"):
+        load_config(config_path)
 
 
 def test_load_config_parses_llm_caller_prompt_config(tmp_path: Path) -> None:

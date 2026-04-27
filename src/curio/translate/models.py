@@ -2,7 +2,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, cast
 
-from curio.llm_caller import LlmUsage, ProviderName
+from curio.llm_caller import LlmCostEstimate, LlmUsage, ProviderName
 from curio.schemas import SchemaName, validate_json
 
 JsonObject = dict[str, Any]
@@ -243,6 +243,7 @@ class LlmSummary:
     provider: ProviderName | str
     model: str | None
     usage: LlmUsage
+    cost_estimate: LlmCostEstimate | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "provider", ProviderName(self.provider))
@@ -256,6 +257,9 @@ class LlmSummary:
             provider=_require_string(_require_field(payload, "provider"), "provider"),
             model=cast(str | None, _require_field(payload, "model")),
             usage=LlmUsage.from_json(_require_field(payload, "usage")),
+            cost_estimate=None
+            if _require_field(payload, "cost_estimate") is None
+            else LlmCostEstimate.from_json(_require_field(payload, "cost_estimate")),
         )
 
     def to_json(self) -> JsonObject:
@@ -264,6 +268,7 @@ class LlmSummary:
             "provider": provider.value,
             "model": self.model,
             "usage": self.usage.to_json(),
+            "cost_estimate": None if self.cost_estimate is None else self.cost_estimate.to_json(),
         }
 
 

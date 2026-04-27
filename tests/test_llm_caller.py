@@ -6,9 +6,11 @@ from curio.llm_caller import (
     JsonSchemaOutput,
     LlmCapability,
     LlmClient,
+    LlmCostEstimate,
     LlmMessage,
     LlmMessageRole,
     LlmOutput,
+    LlmPricing,
     LlmRequest,
     LlmResponse,
     LlmStatus,
@@ -17,6 +19,7 @@ from curio.llm_caller import (
     ProviderName,
     TextContentPart,
     UnsupportedCapabilityError,
+    estimate_llm_cost,
 )
 from curio.schemas import SchemaName, SchemaValidationError, validate_json
 
@@ -33,6 +36,27 @@ def make_usage() -> LlmUsage:
         completed_at="2026-04-24T15:20:03Z",
         wall_seconds=3,
         thinking_seconds=None,
+    )
+
+
+def make_pricing() -> LlmPricing:
+    return LlmPricing(
+        currency="USD",
+        basis="api_equivalent",
+        input_price_per_million=5.0,
+        cached_input_price_per_million=0.5,
+        output_price_per_million=30.0,
+    )
+
+
+def make_cost_estimate() -> LlmCostEstimate:
+    return LlmCostEstimate(
+        currency="USD",
+        basis="api_equivalent",
+        amount=0.00017,
+        input_price_per_million=5.0,
+        cached_input_price_per_million=0.5,
+        output_price_per_million=30.0,
     )
 
 
@@ -193,6 +217,50 @@ def test_unsupported_capability_error_handles_no_missing_capabilities() -> None:
     assert str(error).endswith("none")
 
 
+def test_estimate_llm_cost_uses_api_equivalent_pricing() -> None:
+    estimate = estimate_llm_cost(make_usage(), make_pricing())
+
+    assert estimate == make_cost_estimate()
+    assert estimate_llm_cost(make_usage(), None) is None
+    assert estimate_llm_cost(
+        LlmUsage(
+            input_tokens=None,
+            cached_input_tokens=None,
+            output_tokens=4,
+            reasoning_tokens=None,
+            total_tokens=4,
+            metered_objects=[],
+            started_at="2026-04-24T15:20:00Z",
+            completed_at="2026-04-24T15:20:03Z",
+            wall_seconds=3,
+            thinking_seconds=None,
+        ),
+        make_pricing(),
+    ) is None
+    assert estimate_llm_cost(
+        LlmUsage(
+            input_tokens=10,
+            cached_input_tokens=None,
+            output_tokens=4,
+            reasoning_tokens=None,
+            total_tokens=14,
+            metered_objects=[],
+            started_at="2026-04-24T15:20:00Z",
+            completed_at="2026-04-24T15:20:03Z",
+            wall_seconds=3,
+            thinking_seconds=None,
+        ),
+        make_pricing(),
+    ) == LlmCostEstimate(
+        currency="USD",
+        basis="api_equivalent",
+        amount=0.00017,
+        input_price_per_million=5.0,
+        cached_input_price_per_million=0.5,
+        output_price_per_million=30.0,
+    )
+
+
 def test_llm_message_rejects_empty_content() -> None:
     with pytest.raises(ValueError, match="content must not be empty"):
         LlmMessage(role="user", content=[])
@@ -220,6 +288,8 @@ def test_llm_nested_models_parse_from_json() -> None:
         unit="count",
     )
     assert LlmUsage.from_json(make_usage().to_json()) == make_usage()
+    assert LlmPricing.from_json(make_pricing().to_json()) == make_pricing()
+    assert LlmCostEstimate.from_json(make_cost_estimate().to_json()) == make_cost_estimate()
     assert LlmOutput.from_json({"type": "json", "value": {"ok": True}}) == LlmOutput(value={"ok": True})
 
 
@@ -342,6 +412,26 @@ def test_metered_object_and_usage_reject_negative_numbers() -> None:
             wall_seconds=3,
             thinking_seconds=None,
         )
+
+
+def test_pricing_and_cost_reject_invalid_values() -> None:
+    with pytest.raises(ValueError, match="currency must be USD"):
+        LlmPricing("EUR", "api_equivalent", 5.0, 0.5, 30.0)
+
+    with pytest.raises(ValueError, match="basis must be api_equivalent"):
+        LlmPricing("USD", "invoice", 5.0, 0.5, 30.0)
+
+    with pytest.raises(ValueError, match="input_price_per_million"):
+        LlmPricing("USD", "api_equivalent", -1, 0.5, 30.0)
+
+    with pytest.raises(ValueError, match="amount"):
+        LlmCostEstimate("USD", "api_equivalent", -1, 5.0, 0.5, 30.0)
+
+    with pytest.raises(ValueError, match="currency must be USD"):
+        LlmCostEstimate("EUR", "api_equivalent", 0, 5.0, 0.5, 30.0)
+
+    with pytest.raises(ValueError, match="basis must be api_equivalent"):
+        LlmCostEstimate("USD", "invoice", 0, 5.0, 0.5, 30.0)
 
 
 def test_llm_response_rejects_duplicate_warnings() -> None:

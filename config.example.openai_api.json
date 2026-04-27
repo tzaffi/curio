@@ -7,6 +7,13 @@
       "provider": "openai_api",
       "model": "gpt-5.4-mini",
       "timeout_seconds": 300,
+      "pricing": {
+        "currency": "USD",
+        "basis": "api_equivalent",
+        "input_price_per_million": 0.75,
+        "cached_input_price_per_million": 0.075,
+        "output_price_per_million": 4.5
+      },
       "prompt": {
         "instructions": "Return only JSON that satisfies the provided schema. Classify each source block and conditionally translate it into English.",
         "user": "Use the translation request JSON below to classify language and conditionally translate each block into English.\n\nRules:\n- Target language is exactly en.\n- Estimate english_confidence_estimate for each source block.\n- Set translation_required to false and translated_text to null only when the block is English above the threshold.\n- Otherwise set translation_required to true and translate the full source block into English.\n- Preserve source meaning; do not summarize or add interpretation.\n- Preserve URLs, code identifiers, hashtags, handles, filenames, and quoted strings unless natural language inside them clearly needs translation.\n- Preserve input block order and return exactly one output block for each input block.\n- Emit compact warnings only for corrupt text, partially untranslatable fragments, schema-repair events, mixed-language ambiguity, or provider/runtime issues.\n\nTranslation request JSON:\n{translation_request_json}\n\nRequired output JSON Schema:\n{output_schema_json}"
@@ -33,6 +40,13 @@
       "provider": "openai_api",
       "model": "gpt-5.5",
       "timeout_seconds": 300,
+      "pricing": {
+        "currency": "USD",
+        "basis": "api_equivalent",
+        "input_price_per_million": 5.0,
+        "cached_input_price_per_million": 0.5,
+        "output_price_per_million": 30.0
+      },
       "prompt": {
         "instructions": "Return only JSON that satisfies the provided schema. Classify each source block and conditionally translate it into English.",
         "user": "Use the translation request JSON below to classify language and conditionally translate each block into English.\n\nRules:\n- Target language is exactly en.\n- Estimate english_confidence_estimate for each source block.\n- Set translation_required to false and translated_text to null only when the block is English above the threshold.\n- Otherwise set translation_required to true and translate the full source block into English.\n- Preserve source meaning; do not summarize or add interpretation.\n- Preserve URLs, code identifiers, hashtags, handles, filenames, and quoted strings unless natural language inside them clearly needs translation.\n- Preserve input block order and return exactly one output block for each input block.\n- Emit compact warnings only for corrupt text, partially untranslatable fragments, schema-repair events, mixed-language ambiguity, or provider/runtime issues.\n\nTranslation request JSON:\n{translation_request_json}\n\nRequired output JSON Schema:\n{output_schema_json}"

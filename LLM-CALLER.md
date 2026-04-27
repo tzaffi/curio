@@ -80,6 +80,7 @@ V1 config uses named `llm_callers` plus workflow defaults such as
 - `timeout_seconds`
 - provider-specific tuning
 - optional translator prompt overrides
+- optional API-equivalent `pricing` used only for local cost estimates
 
 Multiple entries may use the same provider with different models or tuning, such as `translator_codex_gpt_55`, `translator_codex_gpt_54_mini`, and `translator_openai_gpt_54_mini_cold`.
 

@@ -6,7 +6,9 @@ import pytest
 import curio.translate as translate
 from curio.config import LlmCallerPromptConfig
 from curio.llm_caller import (
+    LlmCostEstimate,
     LlmOutput,
+    LlmPricing,
     LlmRequest,
     LlmResponse,
     LlmUsage,
@@ -61,6 +63,17 @@ def make_request() -> TranslationRequest:
 
 def make_summary() -> LlmSummary:
     return LlmSummary(provider="codex_cli", model="gpt-test", usage=make_usage())
+
+
+def make_cost_estimate() -> LlmCostEstimate:
+    return LlmCostEstimate(
+        currency="USD",
+        basis="api_equivalent",
+        amount=0.0002115,
+        input_price_per_million=0.75,
+        cached_input_price_per_million=0.075,
+        output_price_per_million=4.5,
+    )
 
 
 class RecordingLlmClient:
@@ -195,8 +208,37 @@ def test_translation_response_serializes_to_schema_payload() -> None:
     payload = response.to_json()
 
     assert payload["llm"]["provider"] == "codex_cli"
+    assert payload["llm"]["cost_estimate"] is None
     assert payload["blocks"][0]["translated_text"] == "Today we are releasing a new model."
     validate_json(payload, SchemaName.TRANSLATION_RESPONSE)
+
+
+def test_translation_response_serializes_cost_estimate_to_schema_payload() -> None:
+    response = TranslationResponse(
+        request_id="translate-test",
+        blocks=[
+            TranslatedBlock(
+                block_id=1,
+                name="tweet_text",
+                detected_language="ja",
+                english_confidence_estimate=0.01,
+                translation_required=True,
+                translated_text="Today we are releasing a new model.",
+            )
+        ],
+        llm=LlmSummary(
+            provider="codex_cli",
+            model="gpt-test",
+            usage=make_usage(),
+            cost_estimate=make_cost_estimate(),
+        ),
+    )
+
+    payload = response.to_json()
+
+    assert payload["llm"]["cost_estimate"] == make_cost_estimate().to_json()
+    validate_json(payload, SchemaName.TRANSLATION_RESPONSE)
+    assert TranslationResponse.from_json(payload) == response
 
 
 def test_translation_response_parses_from_schema_payload() -> None:
@@ -454,6 +496,34 @@ def test_translation_service_calls_injected_llm_client_and_assembles_response() 
         llm=LlmSummary(provider="codex_cli", model="gpt-test", usage=make_usage()),
         warnings=["provider warning"],
     )
+
+
+def test_translation_service_adds_cost_estimate_when_pricing_is_configured() -> None:
+    client = RecordingLlmClient(
+        make_llm_response(
+            {
+                "request_id": "translate-test",
+                "blocks": [
+                    {
+                        "block_id": 1,
+                        "name": "tweet_text",
+                        "detected_language": "ja",
+                        "english_confidence_estimate": 0.01,
+                        "translation_required": True,
+                        "translated_text": "Today we are releasing a new model.",
+                        "warnings": [],
+                    }
+                ],
+            }
+        )
+    )
+
+    response = TranslationService(
+        llm_client=client,
+        pricing_config=LlmPricing("USD", "api_equivalent", 0.75, 0.075, 4.5),
+    ).translate(make_request())
+
+    assert response.llm.cost_estimate == LlmCostEstimate("USD", "api_equivalent", 0.000171, 0.75, 0.075, 4.5)
 
 
 def test_translation_service_passes_prompt_config_to_adapter() -> None:

@@ -11,7 +11,7 @@ from curio.llm_caller.auth import (
     ProviderAuthConfig,
 )
 from curio.llm_caller.codex_cli import CodexCliExecConfig
-from curio.llm_caller.models import ProviderName
+from curio.llm_caller.models import LlmPricing, ProviderName
 from curio.llm_caller.openai_api import OpenAiResponsesConfig
 
 JsonObject = dict[str, Any]
@@ -50,6 +50,7 @@ class LlmCallerConfig:
     auth_config: ProviderAuthConfig
     timeout_seconds: int
     prompt_config: LlmCallerPromptConfig | None = None
+    pricing_config: LlmPricing | None = None
     codex_exec_config: CodexCliExecConfig | None = None
     openai_responses_config: OpenAiResponsesConfig | None = None
 
@@ -132,6 +133,7 @@ def _parse_llm_caller_config(name: str, data: Mapping[str, object]) -> LlmCaller
     model = _require_string(data.get("model"), f"{path}.model")
     timeout_seconds = _require_positive_int(data.get("timeout_seconds"), f"{path}.timeout_seconds")
     prompt_config = _parse_prompt_config(data.get("prompt"), path)
+    pricing_config = _parse_pricing_config(data.get("pricing"), path)
     if provider == ProviderName.OPENAI_API:
         return LlmCallerConfig(
             name=name,
@@ -140,6 +142,7 @@ def _parse_llm_caller_config(name: str, data: Mapping[str, object]) -> LlmCaller
             auth_config=OpenAiApiAuthConfig.from_json(auth_data),
             timeout_seconds=timeout_seconds,
             prompt_config=prompt_config,
+            pricing_config=pricing_config,
             openai_responses_config=_parse_openai_responses_config(
                 _require_mapping(data.get("responses"), f"{path}.responses"),
                 path,
@@ -152,6 +155,7 @@ def _parse_llm_caller_config(name: str, data: Mapping[str, object]) -> LlmCaller
         auth_config=CodexCliAuthConfig.from_json(auth_data),
         timeout_seconds=timeout_seconds,
         prompt_config=prompt_config,
+        pricing_config=pricing_config,
         codex_exec_config=_parse_codex_exec_config(
             _require_mapping(data.get("exec"), f"{path}.exec"),
             path,
@@ -166,6 +170,34 @@ def _parse_prompt_config(value: object, caller_path: str) -> LlmCallerPromptConf
     return LlmCallerPromptConfig(
         instructions=_require_optional_string(data.get("instructions"), f"{caller_path}.prompt.instructions"),
         user=_require_optional_string(data.get("user"), f"{caller_path}.prompt.user"),
+    )
+
+
+def _parse_pricing_config(value: object, caller_path: str) -> LlmPricing | None:
+    if value is None:
+        return None
+    data = _require_mapping(value, f"{caller_path}.pricing")
+    currency = _require_string(data.get("currency"), f"{caller_path}.pricing.currency")
+    if currency != "USD":
+        raise ConfigError(f"config.json '{caller_path}.pricing.currency' must be USD")
+    basis = _require_string(data.get("basis"), f"{caller_path}.pricing.basis")
+    if basis != "api_equivalent":
+        raise ConfigError(f"config.json '{caller_path}.pricing.basis' must be api_equivalent")
+    return LlmPricing(
+        currency=currency,
+        basis=basis,
+        input_price_per_million=_require_non_negative_number(
+            data.get("input_price_per_million"),
+            f"{caller_path}.pricing.input_price_per_million",
+        ),
+        cached_input_price_per_million=_require_non_negative_number(
+            data.get("cached_input_price_per_million"),
+            f"{caller_path}.pricing.cached_input_price_per_million",
+        ),
+        output_price_per_million=_require_non_negative_number(
+            data.get("output_price_per_million"),
+            f"{caller_path}.pricing.output_price_per_million",
+        ),
     )
 
 
@@ -261,6 +293,12 @@ def _require_optional_number(value: object, name: str) -> float | int | None:
     if isinstance(value, int | float) and not isinstance(value, bool):
         return value
     raise ConfigError(f"config.json must define a numeric '{name}'")
+
+
+def _require_non_negative_number(value: object, name: str) -> float | int:
+    if isinstance(value, int | float) and not isinstance(value, bool) and value >= 0:
+        return value
+    raise ConfigError(f"config.json must define a non-negative numeric '{name}'")
 
 
 def _require_bool(value: object, name: str) -> bool:

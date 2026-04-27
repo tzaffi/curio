@@ -390,6 +390,123 @@ class LlmUsage:
 
 
 @dataclass(frozen=True, slots=True)
+class LlmPricing:
+    currency: str
+    basis: str
+    input_price_per_million: float | int
+    cached_input_price_per_million: float | int
+    output_price_per_million: float | int
+
+    def __post_init__(self) -> None:
+        if self.currency != "USD":
+            raise ValueError("currency must be USD")
+        if self.basis != "api_equivalent":
+            raise ValueError("basis must be api_equivalent")
+        _require_non_negative_number(self.input_price_per_million, "input_price_per_million")
+        _require_non_negative_number(self.cached_input_price_per_million, "cached_input_price_per_million")
+        _require_non_negative_number(self.output_price_per_million, "output_price_per_million")
+
+    @classmethod
+    def from_json(cls, value: object) -> "LlmPricing":
+        payload = _require_mapping(value, "pricing")
+        return cls(
+            currency=_require_string(_require_field(payload, "currency"), "currency"),
+            basis=_require_string(_require_field(payload, "basis"), "basis"),
+            input_price_per_million=_require_non_negative_number(
+                _require_field(payload, "input_price_per_million"),
+                "input_price_per_million",
+            ),
+            cached_input_price_per_million=_require_non_negative_number(
+                _require_field(payload, "cached_input_price_per_million"),
+                "cached_input_price_per_million",
+            ),
+            output_price_per_million=_require_non_negative_number(
+                _require_field(payload, "output_price_per_million"),
+                "output_price_per_million",
+            ),
+        )
+
+    def to_json(self) -> JsonObject:
+        return {
+            "currency": self.currency,
+            "basis": self.basis,
+            "input_price_per_million": self.input_price_per_million,
+            "cached_input_price_per_million": self.cached_input_price_per_million,
+            "output_price_per_million": self.output_price_per_million,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class LlmCostEstimate:
+    currency: str
+    basis: str
+    amount: float | int
+    input_price_per_million: float | int
+    cached_input_price_per_million: float | int
+    output_price_per_million: float | int
+
+    def __post_init__(self) -> None:
+        if self.currency != "USD":
+            raise ValueError("currency must be USD")
+        if self.basis != "api_equivalent":
+            raise ValueError("basis must be api_equivalent")
+        _require_non_negative_number(self.amount, "amount")
+        _require_non_negative_number(self.input_price_per_million, "input_price_per_million")
+        _require_non_negative_number(self.cached_input_price_per_million, "cached_input_price_per_million")
+        _require_non_negative_number(self.output_price_per_million, "output_price_per_million")
+
+    @classmethod
+    def from_json(cls, value: object) -> "LlmCostEstimate":
+        payload = _require_mapping(value, "cost_estimate")
+        return cls(
+            currency=_require_string(_require_field(payload, "currency"), "currency"),
+            basis=_require_string(_require_field(payload, "basis"), "basis"),
+            amount=_require_non_negative_number(_require_field(payload, "amount"), "amount"),
+            input_price_per_million=_require_non_negative_number(
+                _require_field(payload, "input_price_per_million"),
+                "input_price_per_million",
+            ),
+            cached_input_price_per_million=_require_non_negative_number(
+                _require_field(payload, "cached_input_price_per_million"),
+                "cached_input_price_per_million",
+            ),
+            output_price_per_million=_require_non_negative_number(
+                _require_field(payload, "output_price_per_million"),
+                "output_price_per_million",
+            ),
+        )
+
+    def to_json(self) -> JsonObject:
+        return {
+            "currency": self.currency,
+            "basis": self.basis,
+            "amount": self.amount,
+            "input_price_per_million": self.input_price_per_million,
+            "cached_input_price_per_million": self.cached_input_price_per_million,
+            "output_price_per_million": self.output_price_per_million,
+        }
+
+
+def estimate_llm_cost(usage: LlmUsage, pricing: LlmPricing | None) -> LlmCostEstimate | None:
+    if pricing is None or usage.input_tokens is None or usage.output_tokens is None:
+        return None
+    cached_input_tokens = 0 if usage.cached_input_tokens is None else usage.cached_input_tokens
+    amount = (
+        usage.input_tokens * pricing.input_price_per_million
+        + cached_input_tokens * pricing.cached_input_price_per_million
+        + usage.output_tokens * pricing.output_price_per_million
+    ) / 1_000_000
+    return LlmCostEstimate(
+        currency=pricing.currency,
+        basis=pricing.basis,
+        amount=amount,
+        input_price_per_million=pricing.input_price_per_million,
+        cached_input_price_per_million=pricing.cached_input_price_per_million,
+        output_price_per_million=pricing.output_price_per_million,
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class LlmOutput:
     value: JsonValue
 

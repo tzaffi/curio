@@ -171,7 +171,8 @@ The stable JSON representation of a translation response is:
       "completed_at": "2026-04-24T15:20:03Z",
       "wall_seconds": 3.0,
       "thinking_seconds": null
-    }
+    },
+    "cost_estimate": null
   },
   "warnings": []
 }
@@ -188,9 +189,22 @@ Fields:
 - `blocks`
   Ordered block results corresponding exactly to request blocks.
 - `llm`
-  Provider, model, and usage metadata from the underlying `LlmResponse`.
+  Provider, model, usage metadata from the underlying `LlmResponse`, and a nullable API-equivalent cost estimate.
 - `warnings`
   Compact request-level operational warnings.
+
+`llm.cost_estimate` is `null` when the selected caller has no configured pricing
+or the provider did not return enough token usage to compute a cost estimate.
+When present, it contains:
+
+- `currency`
+  The estimate currency. V1 supports only `USD`.
+- `basis`
+  The estimate basis. V1 supports only `api_equivalent`.
+- `amount`
+  The estimated cost for this call.
+- `input_price_per_million`, `cached_input_price_per_million`, `output_price_per_million`
+  The configured price inputs used for the estimate.
 
 Each block result contains:
 
