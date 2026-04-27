@@ -4,13 +4,19 @@ UV ?= uv
 CURIO := $(UV) run python -m curio
 
 TRANSLATE_SMOKE_RUN ?= latest
+OPTS ?=
+TEXT ?=
+export TEXT
 
-.PHONY: help sync test translate-smoke translate-smoke-collect translate-smoke-evaluate translate-smoke-report lint lint-fix typecheck check cli-help build-wheel
+.PHONY: help sync test translate-smoke translate-smoke-collect translate-smoke-evaluate translate-smoke-report lint lint-fix typecheck check curio cli-help translate translate-genius translate-help build-wheel
 
 help:
 	@printf '%s\n' \
 		'make sync                     Install or update project dependencies with uv' \
 		'make test                     Run pytest with coverage' \
+		'make curio ARGS="..."         Run Curio CLI with arbitrary arguments' \
+		'make translate                 Run curio translate; pass TEXT="..." and/or OPTS="..."' \
+		'make translate-genius          Run curio translate with translator_codex_gpt_55' \
 		'make translate-smoke          Run opt-in live Codex CLI translation smoke tests' \
 		'make translate-smoke-collect  List opt-in live Codex CLI translation smoke tests' \
 		'make translate-smoke-evaluate Run evaluator for TRANSLATE_SMOKE_RUN=latest' \
@@ -20,6 +26,7 @@ help:
 		'make typecheck                Run ty' \
 		'make check                    Run lint, typecheck, and tests' \
 		'make cli-help                 Show the Curio CLI help' \
+		'make translate-help           Show the curio translate help' \
 		'make build-wheel              Build a wheel for local installation/testing'
 
 sync:
@@ -51,8 +58,28 @@ typecheck:
 
 check: lint typecheck test
 
+curio:
+	$(CURIO) $(ARGS)
+
 cli-help:
 	$(CURIO) --help
+
+translate:
+	@if [ -n "$$TEXT" ]; then \
+		printf '%s' "$$TEXT" | $(CURIO) translate $(OPTS); \
+	else \
+		$(CURIO) translate $(OPTS); \
+	fi
+
+translate-genius:
+	@if [ -n "$$TEXT" ]; then \
+		printf '%s' "$$TEXT" | $(CURIO) translate $(OPTS) --llm-caller translator_codex_gpt_55; \
+	else \
+		$(CURIO) translate $(OPTS) --llm-caller translator_codex_gpt_55; \
+	fi
+
+translate-help:
+	$(CURIO) translate --help
 
 build-wheel:
 	$(UV) build --wheel
