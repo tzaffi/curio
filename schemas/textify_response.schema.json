@@ -1,37 +1,40 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/tzaffi/curio/schemas/translation_response.schema.json",
-  "title": "Curio Translation Response",
+  "$id": "https://github.com/tzaffi/curio/schemas/textify_response.schema.json",
+  "title": "Curio Textify Response",
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "translation_response_version",
+    "textify_response_version",
     "request_id",
-    "target_language",
-    "blocks",
+    "artifacts",
     "llm",
     "warnings"
   ],
   "properties": {
-    "translation_response_version": {
-      "const": "curio-translation-response.v1"
+    "textify_response_version": {
+      "const": "curio-textify-response.v1"
     },
     "request_id": {
       "type": "string",
       "minLength": 1
     },
-    "target_language": {
-      "const": "en"
-    },
-    "blocks": {
+    "artifacts": {
       "type": "array",
       "minItems": 1,
       "items": {
-        "$ref": "#/$defs/translatedBlock"
+        "$ref": "#/$defs/textifiedArtifact"
       }
     },
     "llm": {
-      "$ref": "#/$defs/llmSummary"
+      "oneOf": [
+        {
+          "$ref": "#/$defs/llmSummary"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "warnings": {
       "$ref": "#/$defs/warnings"
@@ -162,7 +165,8 @@
           "type": "string",
           "enum": [
             "openai_api",
-            "codex_cli"
+            "codex_cli",
+            "google_document_ai"
           ]
         },
         "model": {
@@ -231,20 +235,46 @@
         }
       }
     },
-    "translatedBlock": {
+    "suggestedFile": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "block_id",
+        "suggested_path",
+        "output_format",
+        "text"
+      ],
+      "properties": {
+        "suggested_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "output_format": {
+          "type": "string",
+          "minLength": 1
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "textifiedArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
         "name",
-        "detected_language",
-        "english_confidence_estimate",
-        "translation_required",
-        "translated_text",
+        "input_mime_type",
+        "source_sha256",
+        "textification_required",
+        "status",
+        "suggested_files",
+        "detected_languages",
+        "page_count",
         "warnings"
       ],
       "properties": {
-        "block_id": {
+        "artifact_id": {
           "type": "integer",
           "minimum": 1
         },
@@ -252,74 +282,45 @@
           "type": "string",
           "minLength": 1
         },
-        "detected_language": {
-          "type": "string",
-          "minLength": 1
+        "input_mime_type": {
+          "$ref": "#/$defs/nullableNonEmptyString"
         },
-        "english_confidence_estimate": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1
+        "source_sha256": {
+          "$ref": "#/$defs/nullableNonEmptyString"
         },
-        "translation_required": {
+        "textification_required": {
           "type": "boolean"
         },
-        "translated_text": {
-          "oneOf": [
-            {
-              "type": "string",
-              "minLength": 1
-            },
-            {
-              "type": "null"
-            }
+        "status": {
+          "type": "string",
+          "enum": [
+            "converted",
+            "skipped_text_media",
+            "unsupported_media",
+            "no_text_found"
           ]
+        },
+        "suggested_files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/suggestedFile"
+          }
+        },
+        "detected_languages": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "page_count": {
+          "$ref": "#/$defs/nullableNonNegativeNumber"
         },
         "warnings": {
           "$ref": "#/$defs/warnings"
         }
-      },
-      "allOf": [
-        {
-          "if": {
-            "properties": {
-              "translation_required": {
-                "const": true
-              }
-            },
-            "required": [
-              "translation_required"
-            ]
-          },
-          "then": {
-            "properties": {
-              "translated_text": {
-                "type": "string",
-                "minLength": 1
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "translation_required": {
-                "const": false
-              }
-            },
-            "required": [
-              "translation_required"
-            ]
-          },
-          "then": {
-            "properties": {
-              "translated_text": {
-                "type": "null"
-              }
-            }
-          }
-        }
-      ]
+      }
     }
   }
 }

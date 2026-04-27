@@ -8,6 +8,7 @@ from curio.config import (
     ConfigError,
     CurioConfig,
     LlmCallerPromptConfig,
+    TextifyConfig,
     TranslateConfig,
     load_config,
 )
@@ -16,6 +17,8 @@ from curio.llm_caller import (
     CodexCliAuthMode,
     CodexCliReasoningEffort,
     CodexCliVerbosity,
+    GoogleDocumentAiAuthConfig,
+    GoogleDocumentAiProcessorKind,
     LlmPricing,
     OpenAiApiAuthConfig,
     OpenAiReasoningEffort,
@@ -54,6 +57,7 @@ def test_checked_in_codex_example_config_parses() -> None:
     caller_config = config.llm_caller_config("translator_codex_gpt_55")
 
     assert config.translate_config == TranslateConfig(llm_caller="translator_codex_gpt_54_mini")
+    assert config.textify_config == TextifyConfig(llm_caller="textifier_codex_gpt_54_mini")
     assert caller_config.provider == ProviderName.CODEX_CLI
     assert caller_config.model == "gpt-5.5"
     assert caller_config.timeout_seconds == 300
@@ -104,6 +108,21 @@ def test_checked_in_codex_example_config_parses() -> None:
     assert gpt54_config.codex_exec_config.model_verbosity == CodexCliVerbosity.MEDIUM
     assert_default_translation_prompt_config(gpt54_config.prompt_config)
 
+    textifier_config = config.llm_caller_config("textifier_codex_gpt_54_nano")
+    assert textifier_config.provider == ProviderName.CODEX_CLI
+    assert textifier_config.model == "gpt-5.4-nano"
+    assert textifier_config.pricing_config == LlmPricing(
+        currency="USD",
+        basis="api_equivalent",
+        input_price_per_million=0.2,
+        cached_input_price_per_million=0.02,
+        output_price_per_million=1.25,
+    )
+    assert textifier_config.prompt_config == LlmCallerPromptConfig(
+        instructions="Return only JSON that satisfies the provided schema. Extract source-language text from the supplied local media.",
+        user=textifier_config.prompt_config.user,
+    )
+
 
 def test_checked_in_openai_example_config_parses() -> None:
     config = load_config(repo_root() / "config.example.openai_api.json")
@@ -142,6 +161,27 @@ def test_checked_in_openai_example_config_parses() -> None:
         output_price_per_million=30.0,
     )
     assert_default_translation_prompt_config(gpt55_config.prompt_config)
+
+
+def test_checked_in_google_document_ai_example_config_parses() -> None:
+    config = load_config(repo_root() / "config.example.google_document_ai.json")
+    caller_config = config.llm_caller_config("textifier_google_document_ai_layout")
+
+    assert config.textify_config == TextifyConfig(llm_caller="textifier_google_document_ai_layout")
+    assert caller_config.provider == ProviderName.GOOGLE_DOCUMENT_AI
+    assert caller_config.model == "document-ai-layout-parser"
+    assert caller_config.pricing_config == LlmPricing(
+        currency="USD",
+        basis="api_equivalent",
+        input_price_per_million=0,
+        cached_input_price_per_million=0,
+        output_price_per_million=0,
+        metered_price_per_thousand=10,
+        metered_name="document_ai_pages",
+        metered_unit="page",
+    )
+    assert isinstance(caller_config.auth_config, GoogleDocumentAiAuthConfig)
+    assert caller_config.auth_config.processor_kind == GoogleDocumentAiProcessorKind.LAYOUT_PARSER
 
 
 def test_load_config_requires_file_and_json_object(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -183,6 +223,12 @@ def test_load_config_parses_optional_translate_config(tmp_path: Path) -> None:
     config = load_config(config_path)
 
     assert config.translate_config == TranslateConfig()
+    assert config.textify_config == TextifyConfig(llm_caller="textifier_codex_gpt_54_mini")
+
+    del payload["textify"]
+    write_config(config_path, payload)
+    config = load_config(config_path)
+    assert config.textify_config == TextifyConfig()
 
 
 def test_load_config_accepts_omitted_llm_caller_pricing(tmp_path: Path) -> None:
@@ -218,6 +264,25 @@ def test_load_config_rejects_invalid_translate_config(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="TranslateConfig"):
         CurioConfig(llm_callers={}, translate_config="bad")
 
+    payload = json.loads((repo_root() / "config.example.codex_cli.json").read_text(encoding="utf-8"))
+    payload["textify"] = "bad"
+    write_config(config_path, payload)
+    with pytest.raises(ConfigError, match="textify"):
+        load_config(config_path)
+
+    payload["textify"] = {"llm_caller": ""}
+    write_config(config_path, payload)
+    with pytest.raises(ConfigError, match="textify.llm_caller"):
+        load_config(config_path)
+
+    payload["textify"] = {"llm_caller": "missing_caller"}
+    write_config(config_path, payload)
+    with pytest.raises(ConfigError, match="llm_callers.missing_caller"):
+        load_config(config_path)
+
+    with pytest.raises(ConfigError, match="TextifyConfig"):
+        CurioConfig(llm_callers={}, textify_config="bad")
+
 
 def test_load_config_rejects_invalid_llm_caller_pricing(tmp_path: Path) -> None:
     config_path = tmp_path / "config.json"
@@ -251,6 +316,12 @@ def test_load_config_rejects_invalid_llm_caller_pricing(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="input_price_per_million"):
         load_config(config_path)
 
+    payload = json.loads((repo_root() / "config.example.google_document_ai.json").read_text(encoding="utf-8"))
+    payload["llm_callers"]["textifier_google_document_ai_layout"]["pricing"]["metered_price_per_thousand"] = "free"
+    write_config(config_path, payload)
+    with pytest.raises(ConfigError, match="metered_price_per_thousand"):
+        load_config(config_path)
+
 
 def test_load_config_parses_llm_caller_prompt_config(tmp_path: Path) -> None:
     config_path = tmp_path / "config.json"
@@ -258,6 +329,9 @@ def test_load_config_parses_llm_caller_prompt_config(tmp_path: Path) -> None:
     payload["llm_callers"]["translator_codex_gpt_55"]["prompt"] = {
         "instructions": "Return {target_language} JSON for {request_id}",
         "user": "Translate {translation_request_json} with {output_schema_json} at {english_confidence_threshold}",
+    }
+    payload["llm_callers"]["textifier_codex_gpt_54_mini"]["prompt"] = {
+        "user": "Textify {textify_request_json} {artifact_manifest_json} {preferred_output_format} {suggested_file_policy}"
     }
     payload["llm_callers"]["translator_codex_gpt_54_mini"]["prompt"] = {
         "instructions": "Only instructions {request_id}",
@@ -272,6 +346,9 @@ def test_load_config_parses_llm_caller_prompt_config(tmp_path: Path) -> None:
     )
     assert config.llm_caller_config("translator_codex_gpt_54_mini").prompt_config == LlmCallerPromptConfig(
         instructions="Only instructions {request_id}",
+    )
+    assert config.llm_caller_config("textifier_codex_gpt_54_mini").prompt_config == LlmCallerPromptConfig(
+        user="Textify {textify_request_json} {artifact_manifest_json} {preferred_output_format} {suggested_file_policy}"
     )
 
 

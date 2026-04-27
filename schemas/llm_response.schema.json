@@ -34,7 +34,8 @@
       "type": "string",
       "enum": [
         "codex_cli",
-        "openai_api"
+        "openai_api",
+        "google_document_ai"
       ]
     },
     "model": {

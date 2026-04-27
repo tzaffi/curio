@@ -10,7 +10,7 @@ This document is normative for:
 - the Python module boundary for `curio.llm_caller`
 - provider client responsibilities
 - usage and timing accounting
-- the v1 provider set: Codex CLI and OpenAI API
+- the v1 provider set: Codex CLI, OpenAI API, and Google Document AI
 - how unsupported provider capabilities fail
 
 The machine-readable counterparts to this document are:
@@ -64,6 +64,7 @@ The public boundary should include:
 - concrete clients:
   - `CodexCliClient`
   - `OpenAiApiClient`
+  - `GoogleDocumentAiClient`
 
 Curio workflows should accept an `LlmClient` dependency. They should not import provider SDKs, spawn provider CLIs, read provider auth files, or parse provider raw responses directly.
 
@@ -74,12 +75,13 @@ Curio workflows should accept an `LlmClient` dependency. They should not import 
 V1 config uses named `llm_callers` plus workflow defaults such as
 `translate.llm_caller`. Each named caller entry owns:
 
-- `provider`: `codex_cli` or `openai_api`
+- `provider`: `codex_cli`, `openai_api`, or `google_document_ai`
 - `model`
 - `auth`
 - `timeout_seconds`
 - provider-specific tuning
 - optional translator prompt overrides
+- optional textifier prompt overrides
 - optional API-equivalent `pricing` used only for local cost estimates
 
 Multiple entries may use the same provider with different models or tuning, such as `translator_codex_gpt_55`, `translator_codex_gpt_54_mini`, and `translator_openai_gpt_54_mini_cold`.
@@ -103,6 +105,9 @@ The supported template placeholders are `translation_request_json`,
 `output_schema_json`, `request_id`, `target_language`, and
 `english_confidence_threshold`.
 
+Textifier prompt overrides may additionally use `textify_request_json`,
+`artifact_manifest_json`, `preferred_output_format`, and `suggested_file_policy`.
+
 Translation caller selection is resolved in this order:
 
 1. CLI `--llm-caller`
@@ -118,6 +123,10 @@ Provider identifiers are:
   Local subprocess calls to `codex exec`.
 - `openai_api`
   Direct OpenAI API calls.
+- `google_document_ai`
+  Google Document AI document extraction behind the same caller boundary. It is
+  not a classic LLM, but it returns a Curio `LlmResponse` so workflows do not
+  depend on the Google SDK.
 
 V1 must fully specify and unit-test both providers. Future providers may be added by implementing `LlmClient`, but they must declare capabilities explicitly before Curio workflows can depend on them.
 
@@ -134,6 +143,18 @@ Recommended v1 capabilities:
 - `reasoning_token_usage`
 - `thinking_time`
 - `subprocess`
+- `file_input`
+- `image_input`
+- `pdf_input`
+- `document_text_extraction`
+- `ocr`
+- `layout_extraction`
+- `markdown_output`
+- `plain_text_output`
+- `suggested_file_output`
+- `multiple_file_output`
+- `relative_path_output`
+- `metered_page_usage`
 
 Requests may mark capabilities as required.
 
@@ -145,6 +166,11 @@ Translation requires:
 - `json_schema_output`
 
 Translation should request usage fields, but it must tolerate missing optional accounting fields by recording `null`.
+
+Textify requires file/media capabilities plus structured output. Codex CLI
+supports image attachments through `codex exec --image` and receives local-file
+metadata in the prompt. Google Document AI reads local file bytes only inside
+its provider transport and records page usage as `metered_objects`.
 
 ## Authentication
 
@@ -225,7 +251,9 @@ Fields:
 - `instructions`
   System-level instruction text owned by the workflow.
 - `input`
-  Ordered message list. V1 content parts are text-only. Workflows may serialize richer structured context, such as translation blocks and thresholds, inside those text parts.
+  Ordered message list. Content parts may be `text` or `local_file`. Local file
+  parts contain absolute path, MIME type, SHA-256, and optional display name; raw
+  bytes are never stored in request JSON.
 - `output`
   Requested output format. V1 requires `json_schema` for machine-read workflows. The schema should describe the model-emitted payload, not provider usage metadata that Curio adds after the call.
 - `required_capabilities`

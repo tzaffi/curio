@@ -16,6 +16,7 @@ from curio.schemas import (
 
 def test_schema_path_resolves_known_schema() -> None:
     assert schema_path(SchemaName.LLM_REQUEST) == DEFAULT_SCHEMA_DIR / "llm_request.schema.json"
+    assert schema_path(SchemaName.TEXTIFY_REQUEST) == DEFAULT_SCHEMA_DIR / "textify_request.schema.json"
     assert schema_path("translation_response").name == "translation_response.schema.json"
 
 
@@ -23,6 +24,7 @@ def test_load_schema_loads_json_object() -> None:
     schema = load_schema(SchemaName.TRANSLATION_REQUEST)
 
     assert schema["title"] == "Curio Translation Request"
+    assert load_schema(SchemaName.TEXTIFY_RESPONSE)["title"] == "Curio Textify Response"
 
 
 def test_load_schema_rejects_missing_file(tmp_path: Path) -> None:

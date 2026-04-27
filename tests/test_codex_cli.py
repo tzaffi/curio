@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 from typing import cast
@@ -26,6 +27,7 @@ from curio.llm_caller import (
     LlmRequest,
     LlmSchemaValidationError,
     LlmTimeoutError,
+    LocalFileContentPart,
     ProviderCallTiming,
     ProviderName,
     SubprocessCodexCliRunner,
@@ -204,6 +206,95 @@ def test_build_codex_exec_command_accepts_minimal_config_without_empty_config() 
             output_schema_path=Path("schema.json"),
             config=CodexCliExecConfig(),
             working_directory=cast(Path, None),
+        )
+
+
+def test_build_codex_exec_command_attaches_local_images_and_formats_file_metadata(tmp_path: Path) -> None:
+    image_path = tmp_path / "scan.png"
+    image_path.write_bytes(b"png")
+    sha256 = hashlib.sha256(b"png").hexdigest()
+    request = LlmRequest(
+        request_id="textify-test",
+        workflow="textify",
+        instructions="Extract text.",
+        input=[
+            LlmMessage(
+                role="user",
+                content=[
+                    TextContentPart(text="see file"),
+                    LocalFileContentPart(
+                        path=str(image_path),
+                        mime_type="image/png",
+                        sha256=sha256,
+                        name="scan.png",
+                    ),
+                ],
+            )
+        ],
+        output=JsonSchemaOutput(name="output", schema={}),
+        required_capabilities=["file_input"],
+        metadata={},
+    )
+
+    command = build_codex_exec_command(
+        request,
+        model="gpt-test",
+        output_schema_path=tmp_path / "schema.json",
+        config=CodexCliExecConfig(),
+        working_directory=tmp_path,
+    )
+
+    assert command.argv[command.argv.index("--image") + 1] == str(image_path)
+    assert "<local_file>" in command.stdin_text
+    assert f"sha256: {sha256}" in command.stdin_text
+
+
+def test_build_codex_exec_command_rejects_unreadable_outside_or_mismatched_files(tmp_path: Path) -> None:
+    image_path = tmp_path / "scan.png"
+    image_path.write_bytes(b"png")
+    outside = tmp_path.parent / "outside.png"
+    outside.write_bytes(b"outside")
+
+    def request_for(path: Path, sha256: str) -> LlmRequest:
+        return LlmRequest(
+            request_id="textify-test",
+            workflow="textify",
+            instructions="Extract.",
+            input=[
+                LlmMessage(
+                    role="user",
+                    content=[LocalFileContentPart(path=str(path), mime_type="image/png", sha256=sha256)],
+                )
+            ],
+            output=JsonSchemaOutput(name="output", schema={}),
+        )
+
+    with pytest.raises(LlmRejectedRequestError, match="sha256"):
+        build_codex_exec_command(
+            request_for(image_path, "bad-sha"),
+            model="gpt-test",
+            output_schema_path=tmp_path / "schema.json",
+            config=CodexCliExecConfig(),
+            working_directory=tmp_path,
+        )
+
+    with pytest.raises(LlmRejectedRequestError, match="working directory"):
+        build_codex_exec_command(
+            request_for(outside, hashlib.sha256(b"outside").hexdigest()),
+            model="gpt-test",
+            output_schema_path=tmp_path / "schema.json",
+            config=CodexCliExecConfig(),
+            working_directory=tmp_path,
+        )
+
+    missing = tmp_path / "missing.png"
+    with pytest.raises(LlmRejectedRequestError, match="not readable"):
+        build_codex_exec_command(
+            request_for(missing, "abc"),
+            model="gpt-test",
+            output_schema_path=tmp_path / "schema.json",
+            config=CodexCliExecConfig(),
+            working_directory=tmp_path,
         )
 
 

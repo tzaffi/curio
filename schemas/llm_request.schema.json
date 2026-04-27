@@ -62,7 +62,19 @@
         "cached_input_usage",
         "reasoning_token_usage",
         "thinking_time",
-        "subprocess"
+        "subprocess",
+        "file_input",
+        "image_input",
+        "pdf_input",
+        "document_text_extraction",
+        "ocr",
+        "layout_extraction",
+        "markdown_output",
+        "plain_text_output",
+        "suggested_file_output",
+        "multiple_file_output",
+        "relative_path_output",
+        "metered_page_usage"
       ]
     },
     "message": {
@@ -85,7 +97,14 @@
           "type": "array",
           "minItems": 1,
           "items": {
-            "$ref": "#/$defs/textContentPart"
+            "oneOf": [
+              {
+                "$ref": "#/$defs/textContentPart"
+              },
+              {
+                "$ref": "#/$defs/localFileContentPart"
+              }
+            ]
           }
         }
       }
@@ -103,6 +122,45 @@
         },
         "text": {
           "type": "string"
+        }
+      }
+    },
+    "localFileContentPart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "path",
+        "mime_type",
+        "sha256",
+        "name"
+      ],
+      "properties": {
+        "type": {
+          "const": "local_file"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mime_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },

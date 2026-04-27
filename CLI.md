@@ -9,17 +9,18 @@ This document is normative for:
 - the top-level `curio` module command
 - the required subcommand names
 - the standalone `translate` command behavior
+- the standalone `textify` command behavior
 - stubs for workflows that are not fully specified yet
 - operator-facing output and exit-code expectations
 
 This document is not the place to define:
 
-- translation quality rules or JSON payloads
+- translation or textification quality rules or JSON payloads
 - provider adapter behavior
 - Google Sheets or Drive persistence
 - exact prompt wording
 
-Those belong in [TRANSLATE.md](TRANSLATE.md), [LLM-CALLER.md](LLM-CALLER.md), [SCHEMA.md](SCHEMA.md), [JSON-PAYLOAD.md](JSON-PAYLOAD.md), and prompt files.
+Those belong in [TRANSLATE.md](TRANSLATE.md), [TEXTIFY.md](TEXTIFY.md), [LLM-CALLER.md](LLM-CALLER.md), [SCHEMA.md](SCHEMA.md), [JSON-PAYLOAD.md](JSON-PAYLOAD.md), and prompt files.
 
 ## Design Principles
 
@@ -54,6 +55,8 @@ V1 reserves these subcommands:
 
 - `translate`
   Standalone text translation. Fully specified in v1.
+- `textify`
+  Standalone media-to-text extraction. Fully specified in v1.
 - `curate`
   Main Curio workflow over `downloads` rows. Stubbed here; detailed implementation remains future work.
 - `bootstrap`
@@ -165,6 +168,55 @@ Recommended v1 exit codes:
 
 Typer may handle usage errors directly, but tests should assert user-visible behavior rather than Typer internals.
 
+## `textify`
+
+The `textify` subcommand converts one local non-text media artifact, or a
+structured textify request JSON file, into source-language text.
+
+Primary examples:
+
+```text
+uv run python -m curio textify screenshot.png
+uv run python -m curio textify --input-json textify-request.json --json
+uv run python -m curio textify screenshot.png --preferred-output-format markdown --stats
+```
+
+Input modes:
+
+- local artifact path as the positional argument
+- structured textify request JSON from `--input-json`
+
+Exactly one input mode should be used.
+
+Core flags:
+
+- `--input-json PATH`
+  Read the structured JSON request defined in [TEXTIFY.md](TEXTIFY.md).
+- `--json`
+  Print the full structured textify response.
+- `--suppress-warnings`
+  Do not print textify warnings to stderr in non-JSON mode.
+- `--stats`
+  Print provider, model, usage, wall time, and cost-estimate metadata to stderr in non-JSON mode.
+- `--output PATH`
+  Write command output to a file instead of stdout.
+- `--mime-type TYPE`
+  Optional MIME type override for artifact path input.
+- `--source-language LANG`
+  Optional source-language hint for artifact path input.
+- `--preferred-output-format auto|markdown|txt`
+  Output format hint. `auto` is the default.
+- `--llm-caller NAME`
+  Override the named LLM caller for this run, such as `textifier_codex_gpt_54_mini`.
+
+LLM caller resolution precedence is CLI `--llm-caller`, structured JSON
+`llm_caller`, then `config.json` `textify.llm_caller`. If every artifact is
+deterministically skipped or unsupported, no LLM caller is required.
+
+For one converted suggested file without `--json`, stdout contains that file's
+text plus a trailing newline. For structured input, `--json`, or multiple/no
+suggested files, stdout contains the full textify response JSON.
+
 ## `curate`
 
 The `curate` subcommand is the main Curio workflow.
@@ -248,6 +300,8 @@ The CLI spec is satisfied only if all of the following are true:
 - `uv run python -m curio` prints help
 - `uv run python -m curio translate "bonjour"` prints an English translation by default
 - `uv run python -m curio translate --json "bonjour"` prints a structured translation response
+- `uv run python -m curio textify --json screenshot.png` prints a structured textify response
 - `translate` rejects ambiguous input modes
+- `textify` rejects ambiguous input modes
 - `translate` can select either `openai_api` or `codex_cli` through the shared LLM caller
 - future subcommand names are reserved without forcing their full behavior into the translate implementation

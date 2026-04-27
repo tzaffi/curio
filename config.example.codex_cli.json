@@ -2,6 +2,9 @@
   "translate": {
     "llm_caller": "translator_codex_gpt_54_mini"
   },
+  "textify": {
+    "llm_caller": "textifier_codex_gpt_54_mini"
+  },
   "llm_callers": {
     "translator_codex_gpt_55": {
       "provider": "codex_cli",
@@ -102,6 +105,108 @@
         "ignore_user_config": false,
         "model_reasoning_effort": "low",
         "model_verbosity": "medium",
+        "extra_config": []
+      }
+    },
+    "textifier_codex_gpt_55": {
+      "provider": "codex_cli",
+      "model": "gpt-5.5",
+      "timeout_seconds": 300,
+      "pricing": {
+        "currency": "USD",
+        "basis": "api_equivalent",
+        "input_price_per_million": 5.0,
+        "cached_input_price_per_million": 0.5,
+        "output_price_per_million": 30.0
+      },
+      "prompt": {
+        "instructions": "Return only JSON that satisfies the provided schema. Extract source-language text from the supplied local media.",
+        "user": "Use the media artifact listed below to extract visible/readable source-language text.\n\nRules:\n- Do not translate.\n- Do not summarize or interpret.\n- Preserve reading order and meaningful line breaks.\n- Use Markdown for headings, lists, tables, and document structure.\n- Use plain text or a natural code/config/log extension when the source is a flat file screenshot.\n- Suggest one or more safe relative output paths.\n- Preserve visible filenames exactly and infer extensions only when obvious.\n- Split multiple implied files into separate suggested file records.\n- Emit compact warnings for uncertain OCR, low quality, cropped/rotated content, or unreadable regions.\n\nPreferred output format: {preferred_output_format}\nSuggested file policy: {suggested_file_policy}\n\nArtifact manifest JSON:\n{artifact_manifest_json}\n\nTextify request JSON:\n{textify_request_json}\n\nRequired output JSON Schema:\n{output_schema_json}"
+      },
+      "auth": {
+        "provider": "codex_cli",
+        "mode": "chatgpt",
+        "api_key_ref": null,
+        "require_keyring_credentials_store": true
+      },
+      "exec": {
+        "executable": "codex",
+        "sandbox": "read-only",
+        "color": "never",
+        "ephemeral": true,
+        "json_events": true,
+        "skip_git_repo_check": false,
+        "ignore_user_config": false,
+        "model_reasoning_effort": "low",
+        "model_verbosity": null,
+        "extra_config": []
+      }
+    },
+    "textifier_codex_gpt_54_mini": {
+      "provider": "codex_cli",
+      "model": "gpt-5.4-mini",
+      "timeout_seconds": 300,
+      "pricing": {
+        "currency": "USD",
+        "basis": "api_equivalent",
+        "input_price_per_million": 0.75,
+        "cached_input_price_per_million": 0.075,
+        "output_price_per_million": 4.5
+      },
+      "prompt": {
+        "instructions": "Return only JSON that satisfies the provided schema. Extract source-language text from the supplied local media.",
+        "user": "Use the media artifact listed below to extract visible/readable source-language text.\n\nRules:\n- Do not translate.\n- Do not summarize or interpret.\n- Preserve reading order and meaningful line breaks.\n- Use Markdown for headings, lists, tables, and document structure.\n- Use plain text or a natural code/config/log extension when the source is a flat file screenshot.\n- Suggest one or more safe relative output paths.\n- Preserve visible filenames exactly and infer extensions only when obvious.\n- Split multiple implied files into separate suggested file records.\n- Emit compact warnings for uncertain OCR, low quality, cropped/rotated content, or unreadable regions.\n\nPreferred output format: {preferred_output_format}\nSuggested file policy: {suggested_file_policy}\n\nArtifact manifest JSON:\n{artifact_manifest_json}\n\nTextify request JSON:\n{textify_request_json}\n\nRequired output JSON Schema:\n{output_schema_json}"
+      },
+      "auth": {
+        "provider": "codex_cli",
+        "mode": "chatgpt",
+        "api_key_ref": null,
+        "require_keyring_credentials_store": true
+      },
+      "exec": {
+        "executable": "codex",
+        "sandbox": "read-only",
+        "color": "never",
+        "ephemeral": true,
+        "json_events": true,
+        "skip_git_repo_check": false,
+        "ignore_user_config": false,
+        "model_reasoning_effort": "low",
+        "model_verbosity": "low",
+        "extra_config": []
+      }
+    },
+    "textifier_codex_gpt_54_nano": {
+      "provider": "codex_cli",
+      "model": "gpt-5.4-nano",
+      "timeout_seconds": 300,
+      "pricing": {
+        "currency": "USD",
+        "basis": "api_equivalent",
+        "input_price_per_million": 0.2,
+        "cached_input_price_per_million": 0.02,
+        "output_price_per_million": 1.25
+      },
+      "prompt": {
+        "instructions": "Return only JSON that satisfies the provided schema. Extract source-language text from the supplied local media.",
+        "user": "Use the media artifact listed below to extract visible/readable source-language text.\n\nRules:\n- Do not translate.\n- Do not summarize or interpret.\n- Preserve reading order and meaningful line breaks.\n- Use Markdown for headings, lists, tables, and document structure.\n- Use plain text or a natural code/config/log extension when the source is a flat file screenshot.\n- Suggest one or more safe relative output paths.\n- Preserve visible filenames exactly and infer extensions only when obvious.\n- Split multiple implied files into separate suggested file records.\n- Emit compact warnings for uncertain OCR, low quality, cropped/rotated content, or unreadable regions.\n\nPreferred output format: {preferred_output_format}\nSuggested file policy: {suggested_file_policy}\n\nArtifact manifest JSON:\n{artifact_manifest_json}\n\nTextify request JSON:\n{textify_request_json}\n\nRequired output JSON Schema:\n{output_schema_json}"
+      },
+      "auth": {
+        "provider": "codex_cli",
+        "mode": "chatgpt",
+        "api_key_ref": null,
+        "require_keyring_credentials_store": true
+      },
+      "exec": {
+        "executable": "codex",
+        "sandbox": "read-only",
+        "color": "never",
+        "ephemeral": true,
+        "json_events": true,
+        "skip_git_repo_check": false,
+        "ignore_user_config": false,
+        "model_reasoning_effort": "low",
+        "model_verbosity": "low",
         "extra_config": []
       }
     }

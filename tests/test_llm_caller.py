@@ -15,10 +15,12 @@ from curio.llm_caller import (
     LlmResponse,
     LlmStatus,
     LlmUsage,
+    LocalFileContentPart,
     MeteredObject,
     ProviderName,
     TextContentPart,
     UnsupportedCapabilityError,
+    content_part_from_json,
     estimate_llm_cost,
 )
 from curio.schemas import SchemaName, SchemaValidationError, validate_json
@@ -104,6 +106,39 @@ def test_llm_request_serializes_to_schema_payload() -> None:
     )
     assert payload["llm_request_version"] == "curio-llm-request.v1"
     assert payload["input"][0]["content"][0] == {"type": "text", "text": "Translate this."}
+    validate_json(payload, SchemaName.LLM_REQUEST)
+
+
+def test_llm_request_serializes_local_file_content_part(tmp_path) -> None:
+    path = tmp_path / "scan.png"
+    path.write_bytes(b"png")
+    request = LlmRequest(
+        request_id="textify-test",
+        workflow="textify",
+        instructions="Extract.",
+        input=[
+            LlmMessage(
+                role="user",
+                content=[
+                    TextContentPart(text="see file"),
+                    LocalFileContentPart(
+                        path=str(path),
+                        mime_type="image/png",
+                        sha256="abc123",
+                        name="scan.png",
+                    ),
+                ],
+            )
+        ],
+        output=JsonSchemaOutput(name="output", schema={}),
+        required_capabilities=["file_input"],
+        metadata={},
+    )
+
+    payload = request.to_json()
+
+    assert payload["input"][0]["content"][1]["type"] == "local_file"
+    assert LlmRequest.from_json(payload) == request
     validate_json(payload, SchemaName.LLM_REQUEST)
 
 
@@ -261,6 +296,56 @@ def test_estimate_llm_cost_uses_api_equivalent_pricing() -> None:
     )
 
 
+def test_estimate_llm_cost_supports_metered_page_pricing() -> None:
+    pricing = LlmPricing(
+        currency="USD",
+        basis="api_equivalent",
+        input_price_per_million=0,
+        cached_input_price_per_million=0,
+        output_price_per_million=0,
+        metered_price_per_thousand=10,
+        metered_name="document_ai_pages",
+        metered_unit="page",
+    )
+    usage = LlmUsage(
+        input_tokens=None,
+        cached_input_tokens=None,
+        output_tokens=None,
+        reasoning_tokens=None,
+        total_tokens=None,
+        metered_objects=[MeteredObject(name="document_ai_pages", quantity=3, unit="page")],
+        started_at="2026-04-24T15:20:00Z",
+        completed_at="2026-04-24T15:20:03Z",
+        wall_seconds=3,
+        thinking_seconds=None,
+    )
+
+    estimate = estimate_llm_cost(usage, pricing)
+
+    assert estimate == LlmCostEstimate(
+        "USD",
+        "api_equivalent",
+        0.03,
+        0,
+        0,
+        0,
+        10,
+        "document_ai_pages",
+        "page",
+    )
+    assert LlmPricing.from_json(pricing.to_json()) == pricing
+    assert LlmCostEstimate.from_json(estimate.to_json()) == estimate
+    assert estimate_llm_cost(
+        LlmUsage(None, None, None, None, None, [], "2026-04-24T15:20:00Z", "2026-04-24T15:20:03Z", 3, None),
+        pricing,
+    ) is None
+    with pytest.raises(ValueError, match="metered pricing fields"):
+        LlmPricing("USD", "api_equivalent", 0, 0, 0, metered_name="document_ai_pages")
+
+    with pytest.raises(ValueError, match="metered pricing fields"):
+        LlmCostEstimate("USD", "api_equivalent", 0, 0, 0, 0, metered_name="document_ai_pages")
+
+
 def test_llm_message_rejects_empty_content() -> None:
     with pytest.raises(ValueError, match="content must not be empty"):
         LlmMessage(role="user", content=[])
@@ -268,6 +353,16 @@ def test_llm_message_rejects_empty_content() -> None:
 
 def test_llm_nested_models_parse_from_json() -> None:
     assert TextContentPart.from_json({"type": "text", "text": "hello"}) == TextContentPart(text="hello")
+    assert LocalFileContentPart.from_json(
+        {
+            "type": "local_file",
+            "path": "/tmp/scan.png",
+            "mime_type": "image/png",
+            "sha256": "abc",
+            "name": None,
+        }
+    ) == LocalFileContentPart(path="/tmp/scan.png", mime_type="image/png", sha256="abc")
+    assert content_part_from_json({"type": "text", "text": "hello"}) == TextContentPart(text="hello")
     assert LlmMessage.from_json(
         {
             "role": "assistant",
@@ -299,6 +394,15 @@ def test_llm_nested_parsers_reject_invalid_shapes() -> None:
 
     with pytest.raises(ValueError, match="text is required"):
         TextContentPart.from_json({"type": "text"})
+
+    with pytest.raises(ValueError, match="path must be absolute"):
+        LocalFileContentPart(path="relative.png", mime_type="image/png", sha256="abc")
+
+    with pytest.raises(ValueError, match="type must be local_file"):
+        LocalFileContentPart.from_json({"type": "text", "path": "/tmp/x", "mime_type": "image/png", "sha256": "abc"})
+
+    with pytest.raises(ValueError, match="type must be text or local_file"):
+        content_part_from_json({"type": "audio", "path": "/tmp/x"})
 
     with pytest.raises(ValueError, match="content must be a list"):
         LlmMessage.from_json({"role": "user", "content": {}})

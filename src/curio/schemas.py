@@ -16,6 +16,8 @@ class SchemaName(StrEnum):
     EVALUATION_PAYLOAD = "evaluation_payload"
     LLM_REQUEST = "llm_request"
     LLM_RESPONSE = "llm_response"
+    TEXTIFY_REQUEST = "textify_request"
+    TEXTIFY_RESPONSE = "textify_response"
     TRANSLATION_REQUEST = "translation_request"
     TRANSLATION_RESPONSE = "translation_response"
 
@@ -24,6 +26,8 @@ _SCHEMA_FILENAMES = {
     SchemaName.EVALUATION_PAYLOAD: "evaluation_payload.schema.json",
     SchemaName.LLM_REQUEST: "llm_request.schema.json",
     SchemaName.LLM_RESPONSE: "llm_response.schema.json",
+    SchemaName.TEXTIFY_REQUEST: "textify_request.schema.json",
+    SchemaName.TEXTIFY_RESPONSE: "textify_response.schema.json",
     SchemaName.TRANSLATION_REQUEST: "translation_request.schema.json",
     SchemaName.TRANSLATION_RESPONSE: "translation_response.schema.json",
 }

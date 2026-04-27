@@ -11,6 +11,10 @@ from jsonschema import Draft202012Validator, FormatChecker
 from jsonschema.exceptions import ValidationError as JsonSchemaLibraryError
 
 from curio.llm_caller.auth import CodexCliAuthConfig, CodexCliAuthMode
+from curio.llm_caller.local_files import (
+    local_file_content_parts,
+    validate_local_file_content_part,
+)
 from curio.llm_caller.models import (
     JsonObject,
     JsonValue,
@@ -25,7 +29,9 @@ from curio.llm_caller.models import (
     LlmResponse,
     LlmSchemaValidationError,
     LlmTimeoutError,
+    LocalFileContentPart,
     ProviderName,
+    TextContentPart,
 )
 from curio.llm_caller.providers import (
     ProviderCallTiming,
@@ -47,6 +53,15 @@ CODEX_CLI_CAPABILITIES = (
     LlmCapability.CACHED_INPUT_USAGE,
     LlmCapability.REASONING_TOKEN_USAGE,
     LlmCapability.SUBPROCESS,
+    LlmCapability.FILE_INPUT,
+    LlmCapability.IMAGE_INPUT,
+    LlmCapability.PDF_INPUT,
+    LlmCapability.OCR,
+    LlmCapability.MARKDOWN_OUTPUT,
+    LlmCapability.PLAIN_TEXT_OUTPUT,
+    LlmCapability.SUGGESTED_FILE_OUTPUT,
+    LlmCapability.MULTIPLE_FILE_OUTPUT,
+    LlmCapability.RELATIVE_PATH_OUTPUT,
 )
 
 
@@ -254,6 +269,15 @@ def build_codex_exec_command(
         argv.extend(["--config", f'model_verbosity="{model_verbosity.value}"'])
     for override in config.extra_config:
         argv.extend(["--config", override])
+    for local_file in local_file_content_parts(request):
+        validate_local_file_content_part(
+            local_file,
+            provider_name="codex_cli",
+            allowed_root=working_directory,
+            allowed_root_description="configured working directory",
+        )
+        if _is_codex_image(local_file):
+            argv.extend(["--image", local_file.path])
     argv.extend(["--model", model])
     argv.append("-")
     return CodexCliCommand(argv=tuple(argv), stdin_text=build_codex_exec_prompt(request))
@@ -416,10 +440,29 @@ def _format_message(message: LlmMessage) -> str:
     return "\n".join(
         (
             f"<message role={role.value}>",
-            "\n".join(part.text for part in message.content),
+            "\n".join(_format_content_part(part) for part in message.content),
             "</message>",
         )
     )
+
+
+def _format_content_part(part: TextContentPart | LocalFileContentPart) -> str:
+    if isinstance(part, TextContentPart):
+        return part.text
+    return "\n".join(
+        (
+            "<local_file>",
+            f"name: {part.name or ''}",
+            f"path: {part.path}",
+            f"mime_type: {part.mime_type}",
+            f"sha256: {part.sha256}",
+            "</local_file>",
+        )
+    )
+
+
+def _is_codex_image(part: LocalFileContentPart) -> bool:
+    return part.mime_type.casefold().startswith("image/")
 
 
 def _iter_jsonl_events(stdout: str) -> list[Mapping[str, JsonValue]]:

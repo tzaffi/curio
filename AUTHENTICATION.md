@@ -26,6 +26,13 @@ Curio has two OpenAI-related provider paths:
   Curio asks the `codex` command to do the provider work. Codex owns its own
   login. Curio should not copy Codex OAuth tokens.
 
+Curio also has one Google provider path:
+
+- `google_document_ai`
+  Curio calls Google Document AI for OCR/document extraction. V1 uses Google
+  Application Default Credentials. Curio config stores processor routing
+  metadata only, not service account JSON or access tokens.
+
 Auth is provider configuration. It is not an LLM capability and must not appear
 in `LlmRequest.required_capabilities`.
 
@@ -162,6 +169,31 @@ Curio must not:
 - print secrets to stdout or stderr
 - include secrets in exception messages
 - copy Codex OAuth, access, or refresh tokens into Curio-owned storage
+- store Google service account JSON in `config.json`
+- store Google access or refresh tokens in Curio payloads
+
+## Google Document AI Setup
+
+Use this when Curio will call Google Document AI for `textify`.
+
+1. Create or choose a Google Cloud project.
+
+2. Create a Document AI processor, such as Layout Parser or Enterprise
+   Document OCR.
+
+3. Authenticate locally with Application Default Credentials:
+
+   ```bash
+   gcloud auth application-default login
+   ```
+
+4. Copy `config.example.google_document_ai.json` to `config.json`.
+
+5. Fill in `project_id`, `location`, `processor_id`, and optionally
+   `processor_version`.
+
+Curio reads local file bytes only inside the Google provider transport. Request
+and response JSON never include raw media bytes.
 
 ## Testing Rules
 

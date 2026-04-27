@@ -27,6 +27,11 @@ class CodexCliAuthMode(StrEnum):
     API_KEY = "api_key"
 
 
+class GoogleDocumentAiProcessorKind(StrEnum):
+    ENTERPRISE_DOCUMENT_OCR = "enterprise_document_ocr"
+    LAYOUT_PARSER = "layout_parser"
+
+
 class SecretLookupError(LlmAuthError):
     def __init__(self, detail: str, *, error_code: str) -> None:
         super().__init__(detail)
@@ -236,7 +241,57 @@ class CodexCliAuthConfig:
         }
 
 
-ProviderAuthConfig = OpenAiApiAuthConfig | CodexCliAuthConfig
+@dataclass(frozen=True, slots=True)
+class GoogleDocumentAiAuthConfig:
+    project_id: str
+    location: str
+    processor_id: str
+    processor_version: str | None = None
+    processor_kind: GoogleDocumentAiProcessorKind | str = GoogleDocumentAiProcessorKind.ENTERPRISE_DOCUMENT_OCR
+    provider: ProviderName = field(default=ProviderName.GOOGLE_DOCUMENT_AI, init=False)
+
+    def __post_init__(self) -> None:
+        _require_string(self.project_id, "project_id")
+        _require_string(self.location, "location")
+        _require_string(self.processor_id, "processor_id")
+        if self.processor_version is not None:
+            _require_string(self.processor_version, "processor_version")
+        object.__setattr__(
+            self,
+            "processor_kind",
+            GoogleDocumentAiProcessorKind(self.processor_kind),
+        )
+
+    @classmethod
+    def from_json(cls, value: object) -> "GoogleDocumentAiAuthConfig":
+        payload = _require_mapping(value, "google_document_ai auth config")
+        provider = ProviderName(_require_string(_require_field(payload, "provider"), "provider"))
+        if provider != ProviderName.GOOGLE_DOCUMENT_AI:
+            raise ProviderAuthConfigError("provider must be google_document_ai")
+        processor_version = payload.get("processor_version")
+        return cls(
+            project_id=_require_string(_require_field(payload, "project_id"), "project_id"),
+            location=_require_string(_require_field(payload, "location"), "location"),
+            processor_id=_require_string(_require_field(payload, "processor_id"), "processor_id"),
+            processor_version=None
+            if processor_version is None
+            else _require_string(processor_version, "processor_version"),
+            processor_kind=_require_string(_require_field(payload, "processor_kind"), "processor_kind"),
+        )
+
+    def to_json(self) -> JsonObject:
+        processor_kind = cast(GoogleDocumentAiProcessorKind, self.processor_kind)
+        return {
+            "provider": self.provider.value,
+            "project_id": self.project_id,
+            "location": self.location,
+            "processor_id": self.processor_id,
+            "processor_version": self.processor_version,
+            "processor_kind": processor_kind.value,
+        }
+
+
+ProviderAuthConfig = OpenAiApiAuthConfig | CodexCliAuthConfig | GoogleDocumentAiAuthConfig
 
 
 def resolve_openai_api_key(config: OpenAiApiAuthConfig, secret_store: SecretStore) -> str:

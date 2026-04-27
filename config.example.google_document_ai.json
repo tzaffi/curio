@@ -1,0 +1,30 @@
+{
+  "textify": {
+    "llm_caller": "textifier_google_document_ai_layout"
+  },
+  "llm_callers": {
+    "textifier_google_document_ai_layout": {
+      "provider": "google_document_ai",
+      "model": "document-ai-layout-parser",
+      "timeout_seconds": 300,
+      "pricing": {
+        "currency": "USD",
+        "basis": "api_equivalent",
+        "input_price_per_million": 0.0,
+        "cached_input_price_per_million": 0.0,
+        "output_price_per_million": 0.0,
+        "metered_price_per_thousand": 10.0,
+        "metered_name": "document_ai_pages",
+        "metered_unit": "page"
+      },
+      "auth": {
+        "provider": "google_document_ai",
+        "project_id": "replace-with-google-cloud-project-id",
+        "location": "us",
+        "processor_id": "replace-with-processor-id",
+        "processor_version": null,
+        "processor_kind": "layout_parser"
+      }
+    }
+  }
+}

@@ -38,6 +38,7 @@ The v1 payload should follow these rules:
 - `download_row` preserves the exact `iMsgX` downloads-sheet header names.
 - `dossier_snapshot` preserves the exact normalized evidence shown to the model, not the raw artifact by itself.
 - If text shown to the model was truncated, the payload must say so explicitly.
+- If Curio textified non-text media, the extracted source-language text must appear in `dossier_snapshot.evidence_text` before translation.
 - If Curio translated non-English source text for evaluation, the translated English text must appear in `dossier_snapshot.evidence_text` as model-visible input.
 - Curio uses one prefixed label system in v1:
   - `t:` for topics
@@ -118,6 +119,7 @@ It is:
 - after deterministic extraction and cleanup
 - with explicit truncation metadata whenever Curio shortened long text
 - including paired English translation blocks when translation was part of dossier preparation, as defined in [TRANSLATE.md](/Users/zeph/github/tzaffi/curio/TRANSLATE.md)
+- including textified source-language blocks when media textification was part of dossier preparation, as defined in [TEXTIFY.md](/Users/zeph/github/tzaffi/curio/TEXTIFY.md)
 
 Required fields:
 
@@ -167,6 +169,14 @@ When translation occurs under [TRANSLATE.md](/Users/zeph/github/tzaffi/curio/TRA
 - the paired English block uses `language = en`
 - the paired English block stores the original block's `block_id` in `translation_of`
 - absence of a paired translated block means the original block was treated as English
+
+When textification occurs under [TEXTIFY.md](/Users/zeph/github/tzaffi/curio/TEXTIFY.md):
+
+- the original media metadata remains in `artifact.local_artifact` and `dossier_snapshot.details`
+- each textified suggested file becomes one or more source-language `evidence_text` blocks
+- the block `name` should derive from the safe suggested path, such as `scan_md` or `scripts_install_sh`
+- translation can add paired English blocks afterward when needed
+- skipped text media should not create duplicate evidence blocks
 
 Illustrative translated block pair:
 

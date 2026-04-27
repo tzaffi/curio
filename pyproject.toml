@@ -17,6 +17,7 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: CPython",
 ]
 dependencies = [
+    "google-cloud-documentai>=3.14.0",
     "jsonschema>=4.26.0",
     "keyring>=25.7.0",
     "openai>=2.32.0",
@@ -48,6 +49,7 @@ addopts = [
 ]
 markers = [
     "live_codex_cli: skipped by default; set CURIO_LIVE_CODEX_CLI_TESTS=1 to run Codex CLI live smoke tests",
+    "live_codex_cli_textify: skipped by default; set CURIO_LIVE_CODEX_CLI_TEXTIFY_TESTS=1 to run Codex CLI textify live smoke tests",
 ]
 testpaths = ["tests"]
 

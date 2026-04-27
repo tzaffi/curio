@@ -7,7 +7,7 @@ from typer.testing import CliRunner
 
 import curio.cli as cli
 from curio.cli import app
-from curio.config import LlmCallerPromptConfig, TranslateConfig
+from curio.config import LlmCallerPromptConfig, TextifyConfig, TranslateConfig
 from curio.llm_caller import (
     LlmCostEstimate,
     LlmOutput,
@@ -18,6 +18,15 @@ from curio.llm_caller import (
     LlmUsage,
     MeteredObject,
     ProviderName,
+)
+from curio.textify import (
+    Artifact,
+    SuggestedTextFile,
+    TextifiedArtifact,
+    TextifyLlmSummary,
+    TextifyRequest,
+    TextifyResponse,
+    TextifyStatus,
 )
 from curio.translate import (
     Block,
@@ -37,6 +46,7 @@ class FakeCurioConfig:
         prompt_configs: dict[str, LlmCallerPromptConfig | None] | None = None,
     ) -> None:
         self.translate_config = TranslateConfig(llm_caller=llm_caller)
+        self.textify_config = TextifyConfig(llm_caller=llm_caller)
         self.prompt_configs = {} if prompt_configs is None else dict(prompt_configs)
 
     def llm_caller_config(self, name: str) -> object:
@@ -116,6 +126,54 @@ def _fake_translation(text: str) -> str:
     return f"Translated: {text.strip()}"
 
 
+class FakeTextifyService:
+    def __init__(
+        self,
+        *,
+        warnings: Sequence[str] = (),
+        artifact_warnings: Sequence[str] = (),
+        cost_estimate: LlmCostEstimate | None = None,
+    ) -> None:
+        self.requests: list[TextifyRequest] = []
+        self.warnings = tuple(warnings)
+        self.artifact_warnings = tuple(artifact_warnings)
+        self.cost_estimate = cost_estimate
+
+    def textify(self, request: TextifyRequest) -> TextifyResponse:
+        self.requests.append(request)
+        return TextifyResponse(
+            request_id=request.request_id,
+            artifacts=[
+                TextifiedArtifact(
+                    artifact_id=artifact.artifact_id,
+                    name=artifact.name,
+                    input_mime_type=artifact.mime_type or "image/png",
+                    source_sha256=artifact.sha256 or "sha",
+                    textification_required=True,
+                    status=TextifyStatus.CONVERTED,
+                    suggested_files=[
+                        SuggestedTextFile(
+                            suggested_path="scan.md",
+                            output_format="markdown",
+                            text="# Extracted\n\nVisible text.",
+                        )
+                    ],
+                    detected_languages=["en"],
+                    page_count=1,
+                    warnings=self.artifact_warnings,
+                )
+                for artifact in request.artifacts
+            ],
+            llm=TextifyLlmSummary(
+                provider=ProviderName.CODEX_CLI,
+                model=request.llm_caller,
+                usage=make_usage(),
+                cost_estimate=self.cost_estimate,
+            ),
+            warnings=self.warnings,
+        )
+
+
 def install_fake_service(monkeypatch: pytest.MonkeyPatch, service: FakeTranslationService) -> None:
     monkeypatch.setattr(
         cli,
@@ -123,6 +181,15 @@ def install_fake_service(monkeypatch: pytest.MonkeyPatch, service: FakeTranslati
         lambda _llm_caller, _config_path, config=None: service,
     )
     install_fake_config(monkeypatch, "translator_codex_gpt_54_mini")
+
+
+def install_fake_textify_service(monkeypatch: pytest.MonkeyPatch, service: FakeTextifyService) -> None:
+    monkeypatch.setattr(
+        cli,
+        "_build_textify_service",
+        lambda _llm_caller, _config_path, config=None: service,
+    )
+    install_fake_config(monkeypatch, "textifier_codex_gpt_54_mini")
 
 
 def install_fake_config(
@@ -171,6 +238,7 @@ def test_root_without_subcommand_shows_help() -> None:
 
     assert result.exit_code == 0
     assert "Semantic labeling of iMsgX artifacts" in result.output
+    assert "textify" in result.output
     assert "translate" in result.output
     assert "curate" in result.output
     assert "bootstrap" in result.output
@@ -182,6 +250,7 @@ def test_root_help_shows_reserved_commands() -> None:
     result = runner.invoke(app, ["--help"])
 
     assert result.exit_code == 0
+    assert "textify" in result.output
     assert "translate" in result.output
     assert "curate" in result.output
     assert "bootstrap" in result.output
@@ -813,3 +882,230 @@ def test_translate_reports_output_write_failures(monkeypatch: pytest.MonkeyPatch
 
     assert result.exit_code == 1
     assert "could not write --output" in result.output
+
+
+def test_textify_media_path_prints_single_suggested_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    artifact_path = tmp_path / "scan.png"
+    artifact_path.write_bytes(b"png")
+    service = FakeTextifyService()
+    install_fake_textify_service(monkeypatch, service)
+
+    result = runner.invoke(app, ["textify", str(artifact_path)])
+
+    assert result.exit_code == 0
+    assert result.output == "# Extracted\n\nVisible text.\n"
+    assert service.requests[0].llm_caller == "textifier_codex_gpt_54_mini"
+    assert service.requests[0].artifacts[0].path == str(artifact_path.resolve())
+
+
+def test_textify_json_output_includes_warnings_and_cost(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    artifact_path = tmp_path / "scan.png"
+    artifact_path.write_bytes(b"png")
+    service = FakeTextifyService(
+        warnings=["provider warning"],
+        artifact_warnings=["artifact warning"],
+        cost_estimate=LlmCostEstimate("USD", "api_equivalent", 0.000026, 0.75, 0.075, 4.5),
+    )
+    install_fake_textify_service(monkeypatch, service)
+
+    result = runner.invoke(
+        app,
+        [
+            "textify",
+            "--json",
+            "--llm-caller",
+            "textifier_codex_gpt_55",
+            "--mime-type",
+            "image/png",
+            "--source-language",
+            "ja",
+            "--preferred-output-format",
+            "markdown",
+            str(artifact_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["textify_response_version"] == "curio-textify-response.v1"
+    assert payload["warnings"] == ["provider warning"]
+    assert payload["artifacts"][0]["warnings"] == ["artifact warning"]
+    assert payload["llm"]["cost_estimate"]["amount"] == 0.000026
+    assert service.requests[0].artifacts[0].mime_type == "image/png"
+    assert service.requests[0].artifacts[0].source_language_hint == "ja"
+
+
+def test_textify_non_json_emits_warnings_and_stats(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    artifact_path = tmp_path / "scan.png"
+    artifact_path.write_bytes(b"png")
+    service = FakeTextifyService(
+        warnings=["provider warning"],
+        artifact_warnings=["artifact warning"],
+        cost_estimate=LlmCostEstimate("USD", "api_equivalent", 0.000026, 0.75, 0.075, 4.5),
+    )
+    install_fake_textify_service(monkeypatch, service)
+
+    result = runner.invoke(app, ["textify", "--stats", str(artifact_path)])
+
+    assert result.exit_code == 0
+    assert "[WARNINGS: provider warning]" in result.output
+    assert "[WARNINGS: artifact warning]" in result.output
+    assert "[STATS: provider=codex_cli model=textifier_codex_gpt_54_mini" in result.output
+    assert "cost=USD 0.000026 (api_equivalent)" in result.output
+
+    suppressed = runner.invoke(app, ["textify", "--suppress-warnings", str(artifact_path)])
+    assert suppressed.exit_code == 0
+    assert suppressed.output == "# Extracted\n\nVisible text.\n"
+
+    no_cost_service = FakeTextifyService()
+    install_fake_textify_service(monkeypatch, no_cost_service)
+    no_cost = runner.invoke(app, ["textify", "--stats", str(artifact_path)])
+    assert "cost=unavailable" in no_cost.output
+
+
+def test_textify_structured_request_uses_input_llm_caller(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    artifact_path = tmp_path / "scan.png"
+    artifact_path.write_bytes(b"png")
+    input_path = tmp_path / "request.json"
+    request = TextifyRequest(
+        request_id="textify-from-json",
+        artifacts=[
+            Artifact(
+                artifact_id=1,
+                name="scan.png",
+                path=str(artifact_path),
+                mime_type="image/png",
+                sha256="abc",
+                source_language_hint=None,
+                context={},
+            )
+        ],
+        llm_caller="textifier_codex_gpt_55",
+    )
+    input_path.write_text(json.dumps(request.to_json()), encoding="utf-8")
+    service = FakeTextifyService()
+    install_fake_textify_service(monkeypatch, service)
+
+    result = runner.invoke(app, ["textify", "--input-json", str(input_path)])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["request_id"] == "textify-from-json"
+    assert service.requests[0].llm_caller == "textifier_codex_gpt_55"
+
+
+def test_textify_all_text_media_does_not_require_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    text_path = tmp_path / "note.txt"
+    text_path.write_text("hello", encoding="utf-8")
+    monkeypatch.setattr(cli, "load_config", lambda _path: (_ for _ in ()).throw(cli.ConfigError("bad config")))
+
+    result = runner.invoke(app, ["textify", str(text_path), "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["llm"] is None
+    assert payload["artifacts"][0]["status"] == "skipped_text_media"
+
+    stats = runner.invoke(app, ["textify", "--stats", str(text_path)])
+    assert stats.exit_code == 0
+    assert "provider=unavailable" in stats.output
+
+
+def test_textify_rejects_bad_inputs_and_missing_caller(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    artifact_path = tmp_path / "scan.png"
+    artifact_path.write_bytes(b"png")
+    service = FakeTextifyService()
+    install_fake_textify_service(monkeypatch, service)
+    install_fake_config(monkeypatch, None)
+
+    no_input = runner.invoke(app, ["textify"])
+    both_inputs = runner.invoke(app, ["textify", str(artifact_path), "--input-json", str(artifact_path)])
+    bad_format = runner.invoke(app, ["textify", "--preferred-output-format", "docx", str(artifact_path)])
+    bad_llm = runner.invoke(app, ["textify", "--llm-caller", "", str(artifact_path)])
+    missing_caller = runner.invoke(app, ["textify", str(artifact_path)])
+
+    assert no_input.exit_code == 2
+    assert both_inputs.exit_code == 2
+    assert bad_format.exit_code == 2
+    assert bad_llm.exit_code == 2
+    assert missing_caller.exit_code == 2
+    assert cli.TEXTIFY_LLM_CALLER_REQUIRED_MESSAGE in missing_caller.output
+
+
+def test_textify_reports_invalid_json_and_option_scope(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    input_path = tmp_path / "request.json"
+    input_path.write_text("{", encoding="utf-8")
+    service = FakeTextifyService()
+    install_fake_textify_service(monkeypatch, service)
+
+    invalid_json = runner.invoke(app, ["textify", "--input-json", str(input_path)])
+    input_path.write_text(json.dumps({"not": "textify"}), encoding="utf-8")
+    bad_scope = runner.invoke(app, ["textify", "--input-json", str(input_path), "--mime-type", "image/png"])
+
+    assert invalid_json.exit_code == 2
+    assert "--input-json must contain valid JSON" in invalid_json.output
+    assert bad_scope.exit_code == 2
+    assert "--mime-type and --source-language" in bad_scope.output
+
+
+def test_textify_reports_runtime_and_output_write_failures(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    artifact_path = tmp_path / "scan.png"
+    artifact_path.write_bytes(b"png")
+    install_fake_config(monkeypatch, "textifier_codex_gpt_54_mini")
+
+    monkeypatch.setattr(
+        cli,
+        "_build_textify_service",
+        lambda _llm_caller, _config_path, config=None: (_ for _ in ()).throw(cli.LlmCallerError("provider down")),
+    )
+    runtime = runner.invoke(app, ["textify", str(artifact_path)])
+    assert runtime.exit_code == 1
+    assert "provider down" in runtime.output
+
+    service = FakeTextifyService()
+    install_fake_textify_service(monkeypatch, service)
+    output_failure = runner.invoke(app, ["textify", "--output", str(tmp_path), str(artifact_path)])
+    assert output_failure.exit_code == 1
+    assert "could not write --output" in output_failure.output
+
+
+def test_textify_default_service_and_resolution_helpers(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    client = FakeLlmClient(ProviderName.CODEX_CLI)
+    install_fake_config(monkeypatch, "textifier_codex_gpt_54_mini")
+    monkeypatch.setattr(cli, "_build_llm_caller_client", lambda _llm_caller, _config_path, config=None: client)
+
+    service = cli._build_textify_service("textifier_codex_gpt_54_mini", None)
+
+    assert service.llm_client is client
+    assert cli._request_textify_llm_caller(TextifyRequest(request_id="textify-test", artifacts=[] if False else [
+        Artifact(artifact_id=1, name="x.txt", path=str(tmp_path / "x.txt"), mime_type="text/plain", sha256="abc")
+    ])) is None
+
+    no_file_response = TextifyResponse(
+        request_id="textify-test",
+        artifacts=[
+            TextifiedArtifact(
+                artifact_id=1,
+                name="x",
+                input_mime_type=None,
+                source_sha256=None,
+                textification_required=False,
+                status="skipped_text_media",
+            )
+        ],
+    )
+    assert cli._render_textify_output(no_file_response, structured_output=False).startswith("{")
+
+
+def test_textify_reports_config_load_error_when_default_caller_is_needed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    artifact_path = tmp_path / "scan.png"
+    artifact_path.write_bytes(b"png")
+    monkeypatch.setattr(cli, "load_config", lambda _path: (_ for _ in ()).throw(cli.ConfigError("bad config")))
+
+    result = runner.invoke(app, ["textify", str(artifact_path)])
+
+    assert result.exit_code == 1
+    assert "bad config" in result.output

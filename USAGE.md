@@ -18,7 +18,8 @@ cp config.example.openai_api.json config.json
 ```
 
 Then edit `config.json`. The file contains named `llm_callers` and a
-`translate.llm_caller` default. Normal translation commands use that configured
+`translate.llm_caller` default. Codex examples also include `textify.llm_caller`.
+Normal translation and textification commands use those configured
 default. Pass `--llm-caller NAME` only when you want to override the config or
 structured JSON request for one run.
 
@@ -54,6 +55,12 @@ Run a translation:
 
 ```bash
 uv run curio translate "bonjour"
+```
+
+Run media textification:
+
+```bash
+uv run curio textify screenshot.png --json
 ```
 
 ## OpenAI API Values
@@ -94,6 +101,32 @@ Run a translation:
 uv run curio translate "bonjour"
 ```
 
+OpenAI API direct textify callers are intentionally punted in v1.
+
+## Google Document AI Values
+
+Use `config.example.google_document_ai.json` for Document AI textification
+experiments:
+
+```bash
+cp config.example.google_document_ai.json config.json
+```
+
+Important fields:
+
+- `llm_callers.NAME.provider`: `google_document_ai`
+- `llm_callers.NAME.model`: local descriptive model label
+- `llm_callers.NAME.auth.project_id`
+- `llm_callers.NAME.auth.location`
+- `llm_callers.NAME.auth.processor_id`
+- `llm_callers.NAME.auth.processor_version`
+- `llm_callers.NAME.auth.processor_kind`
+- `llm_callers.NAME.pricing.metered_price_per_thousand`
+
+Google auth uses Application Default Credentials. Curio config stores only
+non-secret routing metadata; it does not store service account JSON or access
+tokens.
+
 ## Pricing Values
 
 Pricing is optional. Curio uses it only to compute local cost estimates from
@@ -127,6 +160,8 @@ Configured pricing lives under each named caller:
 
 If pricing is omitted, translation JSON still includes `llm.usage`, but
 `llm.cost_estimate` is `null` and `--stats` reports cost as unavailable.
+For Document AI textify callers, page usage appears in
+`llm.usage.metered_objects` and page pricing can estimate cost when configured.
 
 ## Custom Config Path
 
@@ -147,6 +182,15 @@ Translation caller precedence is:
 1. CLI `--llm-caller`
 2. structured JSON `llm_caller`
 3. `config.json` `translate.llm_caller`
+
+Textify caller precedence is:
+
+1. CLI `--llm-caller`
+2. structured JSON `llm_caller`
+3. `config.json` `textify.llm_caller`
+
+No textify caller is required when every artifact is deterministically skipped
+as text media or unsupported by v1.
 
 ## Prompt Overrides
 
@@ -169,6 +213,9 @@ customize it per named caller when a model needs different wording:
 
 Supported placeholders are `{translation_request_json}`, `{output_schema_json}`,
 `{request_id}`, `{target_language}`, and `{english_confidence_threshold}`.
+Textifier prompt templates may also use `{textify_request_json}`,
+`{artifact_manifest_json}`, `{preferred_output_format}`, and
+`{suggested_file_policy}`.
 Literal braces use normal Python escaping: `{{` and `}}`.
 
 ## Expected Fail-Fast Behavior
@@ -180,6 +227,7 @@ Curio fails instead of guessing when:
 - provider auth config is missing
 - provider-specific runtime config is missing
 - no LLM caller is available from `--llm-caller`, structured JSON, or `translate.llm_caller`
+- non-text textify media needs a caller and no caller is available from `--llm-caller`, structured JSON, or `textify.llm_caller`
 - a named caller has an invalid model, timeout, or tuning value
 
 See [AUTHENTICATION.md](AUTHENTICATION.md) for the secure setup details.
@@ -194,6 +242,9 @@ Use:
 ```bash
 make translate-smoke
 make translate-smoke-evaluate
+make textify-smoke
+# after a retained live run:
+make textify-smoke-evaluate
 ```
 
 See [SMOKE-TESTS.md](SMOKE-TESTS.md) for prerequisites, the reviewed case/model

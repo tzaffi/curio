@@ -32,7 +32,9 @@ from curio.llm_caller.models import (
     LlmResponse,
     LlmSchemaValidationError,
     LlmTimeoutError,
+    LocalFileContentPart,
     ProviderName,
+    TextContentPart,
 )
 from curio.llm_caller.providers import (
     ProviderCallTiming,
@@ -302,8 +304,14 @@ def _message_to_input(message: LlmMessage) -> JsonObject:
     role = cast(LlmMessageRole, message.role)
     return {
         "role": role.value,
-        "content": [{"type": "input_text", "text": part.text} for part in message.content],
+        "content": [_content_part_to_input(part) for part in message.content],
     }
+
+
+def _content_part_to_input(part: TextContentPart | LocalFileContentPart) -> JsonObject:
+    if isinstance(part, TextContentPart):
+        return {"type": "input_text", "text": part.text}
+    raise LlmRejectedRequestError("openai_api local file input is not implemented")
 
 
 def _validate_output_schema(request: LlmRequest, output_value: JsonValue) -> None:

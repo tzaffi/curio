@@ -1,4 +1,4 @@
-# Translation Smoke Tests
+# Smoke Tests
 
 The translation smoke suite is an opt-in live test harness for the Codex CLI translation path. It is intentionally outside the default `make check` execution path because it requires a real `codex` binary, ChatGPT login, network access, and model quota.
 
@@ -121,3 +121,63 @@ The current completed report is indexed from [reports/README.md](reports/README.
 ## Result Policy
 
 Live smoke pass/fail checks verify schema validity, caller selection, pass-through behavior, and artifact retention. Translation quality decisions come from the evaluator report, not from pytest assertions, unless a future checkpoint promotes an evaluator threshold into the gate.
+
+## Textify Smoke Tests
+
+The textify smoke suite is also opt-in and Codex CLI-only for v1. It is skipped
+from default `make check`.
+
+The planned caller matrix is:
+
+| Caller | Model | Purpose |
+| --- | --- | --- |
+| `textifier_codex_gpt_54_nano` | `gpt-5.4-nano` | cheapest extraction candidate |
+| `textifier_codex_gpt_54_mini` | `gpt-5.4-mini` | likely default balance |
+| `textifier_codex_gpt_55` | `gpt-5.5` | frontier reliability baseline |
+
+List live textify smoke tests without running them:
+
+```bash
+make textify-smoke-collect
+```
+
+Run the live textify matrix:
+
+```bash
+make textify-smoke
+```
+
+This expands to:
+
+```bash
+CURIO_LIVE_CODEX_CLI_TEXTIFY_TESTS=1 uv run pytest -m live_codex_cli_textify -s --no-cov
+```
+
+Prepare the evaluator prompt and run the evaluator for the latest retained run:
+
+```bash
+make textify-smoke-evaluate
+```
+
+Publish report files without rerunning the evaluator:
+
+```bash
+make textify-smoke-report TEXTIFY_SMOKE_RUN=tmp/textify-smoke/<run_id>
+```
+
+Raw retained artifacts live under:
+
+```text
+tmp/textify-smoke/{run_id}/
+```
+
+Durable human reports live under:
+
+```text
+reports/textify-smoke/{run_id}/
+```
+
+The textify evaluator should judge OCR/text fidelity, source-language
+preservation, document structure, suggested filenames/extensions/paths,
+multi-file handling, warning quality, and cost. It should produce the final
+model recommendation after live smoke data exists.

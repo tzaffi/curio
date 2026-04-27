@@ -7,6 +7,7 @@ from typing import Any, cast
 
 from curio.llm_caller.auth import (
     CodexCliAuthConfig,
+    GoogleDocumentAiAuthConfig,
     OpenAiApiAuthConfig,
     ProviderAuthConfig,
 )
@@ -17,9 +18,13 @@ from curio.llm_caller.openai_api import OpenAiResponsesConfig
 JsonObject = dict[str, Any]
 LLM_CALLER_PROMPT_TEMPLATE_FIELDS = frozenset(
     (
-        "translation_request_json",
-        "output_schema_json",
+        "artifact_manifest_json",
+        "preferred_output_format",
         "request_id",
+        "suggested_file_policy",
+        "textify_request_json",
+        "output_schema_json",
+        "translation_request_json",
         "target_language",
         "english_confidence_threshold",
     )
@@ -71,18 +76,32 @@ class TranslateConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class TextifyConfig:
+    llm_caller: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.llm_caller is not None:
+            _require_string(self.llm_caller, "textify.llm_caller")
+
+
+@dataclass(frozen=True, slots=True)
 class CurioConfig:
     llm_callers: Mapping[str, LlmCallerConfig]
     translate_config: TranslateConfig = field(default_factory=TranslateConfig)
+    textify_config: TextifyConfig = field(default_factory=TextifyConfig)
 
     def __post_init__(self) -> None:
         if not isinstance(self.translate_config, TranslateConfig):
             raise ConfigError("config.json must define 'translate' as a TranslateConfig")
+        if not isinstance(self.textify_config, TextifyConfig):
+            raise ConfigError("config.json must define 'textify' as a TextifyConfig")
         if (
             self.translate_config.llm_caller is not None
             and self.translate_config.llm_caller not in self.llm_callers
         ):
             raise ConfigError(f"config.json must define llm_callers.{self.translate_config.llm_caller}")
+        if self.textify_config.llm_caller is not None and self.textify_config.llm_caller not in self.llm_callers:
+            raise ConfigError(f"config.json must define llm_callers.{self.textify_config.llm_caller}")
 
     def llm_caller_config(self, name: str) -> LlmCallerConfig:
         caller_name = _require_string(name, "llm_caller")
@@ -110,6 +129,7 @@ def load_config(path: Path | None = None) -> CurioConfig:
     return CurioConfig(
         llm_callers=llm_callers,
         translate_config=_parse_translate_config(data.get("translate")),
+        textify_config=_parse_textify_config(data.get("textify")),
     )
 
 
@@ -147,6 +167,16 @@ def _parse_llm_caller_config(name: str, data: Mapping[str, object]) -> LlmCaller
                 _require_mapping(data.get("responses"), f"{path}.responses"),
                 path,
             ),
+        )
+    if provider == ProviderName.GOOGLE_DOCUMENT_AI:
+        return LlmCallerConfig(
+            name=name,
+            provider=provider,
+            model=model,
+            auth_config=GoogleDocumentAiAuthConfig.from_json(auth_data),
+            timeout_seconds=timeout_seconds,
+            prompt_config=prompt_config,
+            pricing_config=pricing_config,
         )
     return LlmCallerConfig(
         name=name,
@@ -198,6 +228,12 @@ def _parse_pricing_config(value: object, caller_path: str) -> LlmPricing | None:
             data.get("output_price_per_million"),
             f"{caller_path}.pricing.output_price_per_million",
         ),
+        metered_price_per_thousand=_require_optional_non_negative_number(
+            data.get("metered_price_per_thousand"),
+            f"{caller_path}.pricing.metered_price_per_thousand",
+        ),
+        metered_name=_require_optional_string(data.get("metered_name"), f"{caller_path}.pricing.metered_name"),
+        metered_unit=_require_optional_string(data.get("metered_unit"), f"{caller_path}.pricing.metered_unit"),
     )
 
 
@@ -207,6 +243,15 @@ def _parse_translate_config(value: object) -> TranslateConfig:
     data = _require_mapping(value, "translate")
     return TranslateConfig(
         llm_caller=_require_optional_string(data.get("llm_caller"), "translate.llm_caller"),
+    )
+
+
+def _parse_textify_config(value: object) -> TextifyConfig:
+    if value is None:
+        return TextifyConfig()
+    data = _require_mapping(value, "textify")
+    return TextifyConfig(
+        llm_caller=_require_optional_string(data.get("llm_caller"), "textify.llm_caller"),
     )
 
 
@@ -299,6 +344,12 @@ def _require_non_negative_number(value: object, name: str) -> float | int:
     if isinstance(value, int | float) and not isinstance(value, bool) and value >= 0:
         return value
     raise ConfigError(f"config.json must define a non-negative numeric '{name}'")
+
+
+def _require_optional_non_negative_number(value: object, name: str) -> float | int | None:
+    if value is None:
+        return None
+    return _require_non_negative_number(value, name)
 
 
 def _require_bool(value: object, name: str) -> bool:

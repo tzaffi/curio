@@ -261,6 +261,30 @@ def test_translation_response_parses_from_schema_payload() -> None:
     assert TranslationResponse.from_json(response.to_json()) == response
 
 
+def test_translation_response_schema_rejects_google_document_ai_provider() -> None:
+    payload = TranslationResponse(
+        request_id="translate-test",
+        blocks=[
+            TranslatedBlock(
+                block_id=1,
+                name="tweet_text",
+                detected_language="ja",
+                english_confidence_estimate=0.01,
+                translation_required=True,
+                translated_text="Today we are releasing a new model.",
+            )
+        ],
+        llm=make_summary(),
+    ).to_json()
+    payload["llm"]["provider"] = "google_document_ai"
+
+    with pytest.raises(SchemaValidationError, match="translation_response"):
+        validate_json(payload, SchemaName.TRANSLATION_RESPONSE)
+
+    with pytest.raises(SchemaValidationError, match="translation_response"):
+        TranslationResponse.from_json(payload)
+
+
 def test_english_translated_block_serializes_to_null_translation() -> None:
     block = TranslatedBlock(
         block_id=1,
@@ -451,6 +475,11 @@ def test_translation_response_rejects_invalid_fields() -> None:
 def test_llm_summary_rejects_empty_model() -> None:
     with pytest.raises(ValueError, match="model must not be empty"):
         LlmSummary(provider="codex_cli", model="", usage=make_usage())
+
+
+def test_llm_summary_rejects_google_document_ai_provider() -> None:
+    with pytest.raises(TranslationResponseError, match="google_document_ai is not a valid translation"):
+        LlmSummary(provider="google_document_ai", model="document-ai-layout-parser", usage=make_usage())
 
 
 def test_translation_service_calls_injected_llm_client_and_assembles_response() -> None:

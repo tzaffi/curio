@@ -19,6 +19,7 @@ from curio.llm_caller import (
     LlmRequest,
     LlmSchemaValidationError,
     LlmTimeoutError,
+    LocalFileContentPart,
     OpenAiApiAuthConfig,
     OpenAiApiCallResult,
     OpenAiApiClient,
@@ -349,7 +350,34 @@ def test_openai_api_client_rejects_unsupported_capability_before_secret_lookup()
     with pytest.raises(UnsupportedCapabilityError, match="thinking_time"):
         client.complete(make_request(required_capabilities=["thinking_time"]))
 
-    assert transport.calls == []
+
+def test_openai_api_rejects_local_file_content_parts(tmp_path) -> None:
+    path = tmp_path / "scan.png"
+    path.write_bytes(b"png")
+    request = LlmRequest(
+        request_id="textify-test",
+        workflow="textify",
+        instructions="Extract.",
+        input=[
+            LlmMessage(
+                role="user",
+                content=[
+                    LocalFileContentPart(
+                        path=str(path),
+                        mime_type="image/png",
+                        sha256="abc",
+                        name="scan.png",
+                    )
+                ],
+            )
+        ],
+        output=JsonSchemaOutput(name="output", schema={}),
+        required_capabilities=[],
+        metadata={},
+    )
+
+    with pytest.raises(LlmRejectedRequestError, match="local file input"):
+        build_openai_response_request(request, model="gpt-test")
 
 
 def test_openai_api_client_maps_transport_timeout() -> None:

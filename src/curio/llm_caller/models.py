@@ -1,6 +1,7 @@
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 from typing import Any, Protocol, cast
 
 from curio.schemas import SchemaName, validate_json
@@ -15,6 +16,7 @@ LLM_RESPONSE_VERSION = "curio-llm-response.v1"
 class ProviderName(StrEnum):
     CODEX_CLI = "codex_cli"
     OPENAI_API = "openai_api"
+    GOOGLE_DOCUMENT_AI = "google_document_ai"
 
 
 class LlmCapability(StrEnum):
@@ -25,6 +27,18 @@ class LlmCapability(StrEnum):
     REASONING_TOKEN_USAGE = "reasoning_token_usage"
     THINKING_TIME = "thinking_time"
     SUBPROCESS = "subprocess"
+    FILE_INPUT = "file_input"
+    IMAGE_INPUT = "image_input"
+    PDF_INPUT = "pdf_input"
+    DOCUMENT_TEXT_EXTRACTION = "document_text_extraction"
+    OCR = "ocr"
+    LAYOUT_EXTRACTION = "layout_extraction"
+    MARKDOWN_OUTPUT = "markdown_output"
+    PLAIN_TEXT_OUTPUT = "plain_text_output"
+    SUGGESTED_FILE_OUTPUT = "suggested_file_output"
+    MULTIPLE_FILE_OUTPUT = "multiple_file_output"
+    RELATIVE_PATH_OUTPUT = "relative_path_output"
+    METERED_PAGE_USAGE = "metered_page_usage"
 
 
 class LlmMessageRole(StrEnum):
@@ -167,9 +181,62 @@ class TextContentPart:
 
 
 @dataclass(frozen=True, slots=True)
+class LocalFileContentPart:
+    path: str
+    mime_type: str
+    sha256: str
+    name: str | None = None
+
+    def __post_init__(self) -> None:
+        _require_string(self.path, "path")
+        if not Path(self.path).is_absolute():
+            raise ValueError("path must be absolute")
+        _require_string(self.mime_type, "mime_type")
+        _require_string(self.sha256, "sha256")
+        if self.name is not None:
+            _require_string(self.name, "name")
+
+    @classmethod
+    def from_json(cls, value: object) -> "LocalFileContentPart":
+        payload = _require_mapping(value, "content part")
+        part_type = _require_string(_require_field(payload, "type"), "type")
+        if part_type != "local_file":
+            raise ValueError("type must be local_file")
+        name = payload.get("name")
+        return cls(
+            path=_require_string(_require_field(payload, "path"), "path"),
+            mime_type=_require_string(_require_field(payload, "mime_type"), "mime_type"),
+            sha256=_require_string(_require_field(payload, "sha256"), "sha256"),
+            name=None if name is None else _require_string(name, "name"),
+        )
+
+    def to_json(self) -> JsonObject:
+        return {
+            "type": "local_file",
+            "path": self.path,
+            "mime_type": self.mime_type,
+            "sha256": self.sha256,
+            "name": self.name,
+        }
+
+
+LlmContentPart = TextContentPart | LocalFileContentPart
+
+
+def content_part_from_json(value: object) -> LlmContentPart:
+    payload = _require_mapping(value, "content part")
+    part_type = _require_string(_require_field(payload, "type"), "type")
+    if part_type == "text":
+        return TextContentPart.from_json(payload)
+    if part_type == "local_file":
+        return LocalFileContentPart.from_json(payload)
+    raise ValueError("type must be text or local_file")
+
+
+@dataclass(frozen=True, slots=True)
 class LlmMessage:
     role: LlmMessageRole | str
-    content: Sequence[TextContentPart]
+    content: Sequence[LlmContentPart]
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "role", LlmMessageRole(self.role))
@@ -184,7 +251,7 @@ class LlmMessage:
         return cls(
             role=_require_string(_require_field(payload, "role"), "role"),
             content=[
-                TextContentPart.from_json(part)
+                content_part_from_json(part)
                 for part in _require_list(_require_field(payload, "content"), "content")
             ],
         )
@@ -396,6 +463,9 @@ class LlmPricing:
     input_price_per_million: float | int
     cached_input_price_per_million: float | int
     output_price_per_million: float | int
+    metered_price_per_thousand: float | int | None = None
+    metered_name: str | None = None
+    metered_unit: str | None = None
 
     def __post_init__(self) -> None:
         if self.currency != "USD":
@@ -405,6 +475,12 @@ class LlmPricing:
         _require_non_negative_number(self.input_price_per_million, "input_price_per_million")
         _require_non_negative_number(self.cached_input_price_per_million, "cached_input_price_per_million")
         _require_non_negative_number(self.output_price_per_million, "output_price_per_million")
+        if self.metered_price_per_thousand is not None:
+            _require_non_negative_number(self.metered_price_per_thousand, "metered_price_per_thousand")
+            _require_string(self.metered_name, "metered_name")
+            _require_string(self.metered_unit, "metered_unit")
+        elif self.metered_name is not None or self.metered_unit is not None:
+            raise ValueError("metered pricing fields must be configured together")
 
     @classmethod
     def from_json(cls, value: object) -> "LlmPricing":
@@ -424,16 +500,31 @@ class LlmPricing:
                 _require_field(payload, "output_price_per_million"),
                 "output_price_per_million",
             ),
+            metered_price_per_thousand=_require_optional_non_negative_number(
+                payload.get("metered_price_per_thousand"),
+                "metered_price_per_thousand",
+            ),
+            metered_name=None
+            if payload.get("metered_name") is None
+            else _require_string(payload.get("metered_name"), "metered_name"),
+            metered_unit=None
+            if payload.get("metered_unit") is None
+            else _require_string(payload.get("metered_unit"), "metered_unit"),
         )
 
     def to_json(self) -> JsonObject:
-        return {
+        payload: JsonObject = {
             "currency": self.currency,
             "basis": self.basis,
             "input_price_per_million": self.input_price_per_million,
             "cached_input_price_per_million": self.cached_input_price_per_million,
             "output_price_per_million": self.output_price_per_million,
         }
+        if self.metered_price_per_thousand is not None:
+            payload["metered_price_per_thousand"] = self.metered_price_per_thousand
+            payload["metered_name"] = self.metered_name
+            payload["metered_unit"] = self.metered_unit
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -444,6 +535,9 @@ class LlmCostEstimate:
     input_price_per_million: float | int
     cached_input_price_per_million: float | int
     output_price_per_million: float | int
+    metered_price_per_thousand: float | int | None = None
+    metered_name: str | None = None
+    metered_unit: str | None = None
 
     def __post_init__(self) -> None:
         if self.currency != "USD":
@@ -454,6 +548,12 @@ class LlmCostEstimate:
         _require_non_negative_number(self.input_price_per_million, "input_price_per_million")
         _require_non_negative_number(self.cached_input_price_per_million, "cached_input_price_per_million")
         _require_non_negative_number(self.output_price_per_million, "output_price_per_million")
+        if self.metered_price_per_thousand is not None:
+            _require_non_negative_number(self.metered_price_per_thousand, "metered_price_per_thousand")
+            _require_string(self.metered_name, "metered_name")
+            _require_string(self.metered_unit, "metered_unit")
+        elif self.metered_name is not None or self.metered_unit is not None:
+            raise ValueError("metered pricing fields must be configured together")
 
     @classmethod
     def from_json(cls, value: object) -> "LlmCostEstimate":
@@ -474,10 +574,20 @@ class LlmCostEstimate:
                 _require_field(payload, "output_price_per_million"),
                 "output_price_per_million",
             ),
+            metered_price_per_thousand=_require_optional_non_negative_number(
+                payload.get("metered_price_per_thousand"),
+                "metered_price_per_thousand",
+            ),
+            metered_name=None
+            if payload.get("metered_name") is None
+            else _require_string(payload.get("metered_name"), "metered_name"),
+            metered_unit=None
+            if payload.get("metered_unit") is None
+            else _require_string(payload.get("metered_unit"), "metered_unit"),
         )
 
     def to_json(self) -> JsonObject:
-        return {
+        payload: JsonObject = {
             "currency": self.currency,
             "basis": self.basis,
             "amount": self.amount,
@@ -485,17 +595,21 @@ class LlmCostEstimate:
             "cached_input_price_per_million": self.cached_input_price_per_million,
             "output_price_per_million": self.output_price_per_million,
         }
+        if self.metered_price_per_thousand is not None:
+            payload["metered_price_per_thousand"] = self.metered_price_per_thousand
+            payload["metered_name"] = self.metered_name
+            payload["metered_unit"] = self.metered_unit
+        return payload
 
 
 def estimate_llm_cost(usage: LlmUsage, pricing: LlmPricing | None) -> LlmCostEstimate | None:
-    if pricing is None or usage.input_tokens is None or usage.output_tokens is None:
+    if pricing is None:
         return None
-    cached_input_tokens = 0 if usage.cached_input_tokens is None else usage.cached_input_tokens
-    amount = (
-        usage.input_tokens * pricing.input_price_per_million
-        + cached_input_tokens * pricing.cached_input_price_per_million
-        + usage.output_tokens * pricing.output_price_per_million
-    ) / 1_000_000
+    token_amount = _estimate_token_cost(usage, pricing)
+    metered_amount = _estimate_metered_cost(usage, pricing)
+    if token_amount is None and metered_amount is None:
+        return None
+    amount = (0 if token_amount is None else token_amount) + (0 if metered_amount is None else metered_amount)
     return LlmCostEstimate(
         currency=pricing.currency,
         basis=pricing.basis,
@@ -503,7 +617,30 @@ def estimate_llm_cost(usage: LlmUsage, pricing: LlmPricing | None) -> LlmCostEst
         input_price_per_million=pricing.input_price_per_million,
         cached_input_price_per_million=pricing.cached_input_price_per_million,
         output_price_per_million=pricing.output_price_per_million,
+        metered_price_per_thousand=pricing.metered_price_per_thousand,
+        metered_name=pricing.metered_name,
+        metered_unit=pricing.metered_unit,
     )
+
+
+def _estimate_token_cost(usage: LlmUsage, pricing: LlmPricing) -> float | int | None:
+    if usage.input_tokens is None or usage.output_tokens is None:
+        return None
+    cached_input_tokens = 0 if usage.cached_input_tokens is None else usage.cached_input_tokens
+    return (
+        usage.input_tokens * pricing.input_price_per_million
+        + cached_input_tokens * pricing.cached_input_price_per_million
+        + usage.output_tokens * pricing.output_price_per_million
+    ) / 1_000_000
+
+
+def _estimate_metered_cost(usage: LlmUsage, pricing: LlmPricing) -> float | int | None:
+    if pricing.metered_price_per_thousand is None:
+        return None
+    for metered_object in usage.metered_objects:
+        if metered_object.name == pricing.metered_name and metered_object.unit == pricing.metered_unit:
+            return metered_object.quantity * pricing.metered_price_per_thousand / 1_000
+    return None
 
 
 @dataclass(frozen=True, slots=True)

@@ -246,7 +246,10 @@ class LlmSummary:
     cost_estimate: LlmCostEstimate | None = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "provider", ProviderName(self.provider))
+        provider = ProviderName(self.provider)
+        if provider == ProviderName.GOOGLE_DOCUMENT_AI:
+            raise TranslationResponseError("google_document_ai is not a valid translation response provider")
+        object.__setattr__(self, "provider", provider)
         if self.model is not None:
             _require_string(self.model, "model")
 
