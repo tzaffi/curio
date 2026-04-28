@@ -1,5 +1,6 @@
 import json
 import math
+import shutil
 import struct
 import zlib
 from dataclasses import dataclass
@@ -29,6 +30,8 @@ ModelPricing = LlmPricing
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TEXTIFY_SMOKE_ROOT = REPO_ROOT / "tmp" / "textify-smoke"
+TEXTIFY_SMOKE_FIXTURE_ROOT = REPO_ROOT / "tests" / "fixtures" / "textify_smoke"
+TEXTIFY_SMOKE_FIXTURE_MANIFEST = TEXTIFY_SMOKE_FIXTURE_ROOT / "manifest.json"
 TEXTIFY_SMOKE_CALLERS = (
     "textifier_codex_gpt_54_nano",
     "textifier_codex_gpt_54_mini",
@@ -59,6 +62,13 @@ class TextifySmokeCase:
     ground_truth_text: str
     preservation_requirements: tuple[str, ...]
     source_language_hint: str | None = None
+    model_importance: int = 1
+    participates_in_model_ranking: bool = True
+    expect_llm_call: bool = True
+    expected_status: str = "converted"
+    fixture_path: str | None = None
+    source_basenames: tuple[str, ...] = ()
+    fixture_sha256: str | None = None
 
     def __post_init__(self) -> None:
         _require_non_empty_string(self.case_id, "case_id")
@@ -69,13 +79,22 @@ class TextifySmokeCase:
         _require_non_empty_string(self.preferred_output_format, "preferred_output_format")
         _require_non_empty_string(self.expected_output_format, "expected_output_format")
         _require_non_empty_string(self.expected_textification_intent, "expected_textification_intent")
+        _require_non_empty_string(self.expected_status, "expected_status")
+        if not 1 <= self.model_importance <= 10:
+            raise ValueError("model_importance must be between 1 and 10")
         for suggested_path in self.expected_suggested_paths:
             _require_non_empty_string(suggested_path, "expected suggested path")
         for requirement in self.preservation_requirements:
             _require_non_empty_string(requirement, "preservation requirement")
+        for basename in self.source_basenames:
+            _require_non_empty_string(basename, "source basename")
+        if self.fixture_path is not None:
+            _require_non_empty_string(self.fixture_path, "fixture_path")
+        if self.fixture_sha256 is not None:
+            _require_non_empty_string(self.fixture_sha256, "fixture_sha256")
 
 
-TEXTIFY_SMOKE_CASES = (
+GENERATED_TEXTIFY_SMOKE_CASES = (
     TextifySmokeCase(
         case_id="C-IMG-TXT-01",
         input_mode="artifact_path",
@@ -215,7 +234,85 @@ TEXTIFY_NOOP_SMOKE_CASE = TextifySmokeCase(
     expected_textification_intent="Skip an already-text source without calling an LLM.",
     ground_truth_text="ALREADY TEXT\nNO TEXTIFY NEEDED\n",
     preservation_requirements=("skipped_text_media", "no provider call"),
+    participates_in_model_ranking=False,
+    expect_llm_call=False,
+    expected_status="skipped_text_media",
 )
+
+
+def _load_checked_in_smoke_cases() -> tuple[TextifySmokeCase, ...]:
+    payload = json.loads(TEXTIFY_SMOKE_FIXTURE_MANIFEST.read_text(encoding="utf-8"))
+    if payload.get("version") != 1:
+        raise TextifySmokeHarnessError("textify smoke fixture manifest version must be 1")
+    cases = payload.get("cases")
+    if not isinstance(cases, list):
+        raise TextifySmokeHarnessError("textify smoke fixture manifest cases must be a list")
+    return tuple(_smoke_case_from_manifest_case(case_payload) for case_payload in cases)
+
+
+def _smoke_case_from_manifest_case(payload: MappingPayload) -> TextifySmokeCase:
+    fixture_path = _require_string_field(payload, "fixture_path")
+    return TextifySmokeCase(
+        case_id=_require_string_field(payload, "case_id"),
+        input_mode=_require_string_field(payload, "input_mode"),
+        fixture_kind=_require_string_field(payload, "fixture_kind"),
+        filename=Path(fixture_path).name,
+        mime_type=_require_string_field(payload, "mime_type"),
+        preferred_output_format=_require_string_field(payload, "preferred_output_format"),
+        expected_output_format=_require_string_field(payload, "expected_output_format"),
+        expected_suggested_paths=_require_string_tuple(payload, "expected_suggested_paths"),
+        expected_textification_intent=_require_string_field(payload, "expected_textification_intent"),
+        ground_truth_text=_require_string_field(payload, "ground_truth_text"),
+        preservation_requirements=_require_string_tuple(payload, "preservation_requirements"),
+        source_language_hint=_optional_string_field(payload, "source_language_hint"),
+        model_importance=_require_int_field(payload, "model_importance"),
+        participates_in_model_ranking=_require_bool_field(payload, "participates_in_model_ranking"),
+        expect_llm_call=_require_bool_field(payload, "expect_llm_call"),
+        expected_status=_require_string_field(payload, "expected_status"),
+        fixture_path=fixture_path,
+        source_basenames=_require_string_tuple(payload, "source_basenames"),
+        fixture_sha256=_require_string_field(payload, "sha256"),
+    )
+
+
+def _require_string_field(payload: MappingPayload, field_name: str) -> str:
+    value = payload.get(field_name)
+    if not isinstance(value, str):
+        raise TextifySmokeHarnessError(f"textify smoke fixture manifest {field_name} must be a string")
+    return value
+
+
+def _optional_string_field(payload: MappingPayload, field_name: str) -> str | None:
+    value = payload.get(field_name)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TextifySmokeHarnessError(f"textify smoke fixture manifest {field_name} must be a string")
+    return value
+
+
+def _require_string_tuple(payload: MappingPayload, field_name: str) -> tuple[str, ...]:
+    value = payload.get(field_name)
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise TextifySmokeHarnessError(f"textify smoke fixture manifest {field_name} must be a string list")
+    return tuple(value)
+
+
+def _require_bool_field(payload: MappingPayload, field_name: str) -> bool:
+    value = payload.get(field_name)
+    if not isinstance(value, bool):
+        raise TextifySmokeHarnessError(f"textify smoke fixture manifest {field_name} must be a bool")
+    return value
+
+
+def _require_int_field(payload: MappingPayload, field_name: str) -> int:
+    value = payload.get(field_name)
+    if not isinstance(value, int):
+        raise TextifySmokeHarnessError(f"textify smoke fixture manifest {field_name} must be an int")
+    return value
+
+
+TEXTIFY_SMOKE_CASES = GENERATED_TEXTIFY_SMOKE_CASES + _load_checked_in_smoke_cases()
 
 
 def select_codex_textify_caller(
@@ -252,7 +349,9 @@ def write_textify_smoke_fixture(case: TextifySmokeCase, run_root: Path) -> Texti
     fixture_dir.mkdir(parents=True, exist_ok=True)
     (case_dir / "expected.md").write_text(_expected_markdown(case), encoding="utf-8")
     path = fixture_dir / case.filename
-    if case.fixture_kind == "text_noop":
+    if case.fixture_path is not None:
+        shutil.copyfile(TEXTIFY_SMOKE_FIXTURE_ROOT / case.fixture_path, path)
+    elif case.fixture_kind == "text_noop":
         path.write_text(case.ground_truth_text, encoding="utf-8")
     elif case.fixture_kind.startswith("png_"):
         if case.fixture_kind == "png_no_text":
@@ -361,13 +460,16 @@ def evaluator_input_record(
         "ground_truth_text": case.ground_truth_text,
         "expected_output_format": case.expected_output_format,
         "expected_suggested_paths": list(case.expected_suggested_paths),
+        "expected_status": case.expected_status,
+        "model_importance": case.model_importance,
+        "participates_in_model_ranking": case.participates_in_model_ranking,
         "preservation_requirements": list(case.preservation_requirements),
         "status": response.source.status.value,
         "output_format": [suggested_file.output_format for suggested_file in response.source.suggested_files],
         "suggested_files": [suggested_file.to_json() for suggested_file in response.source.suggested_files],
         "rendered_textified_text": render_textified_output(response),
         "response_warnings": _response_warnings(response),
-        "usage": usage_payload(_require_llm_usage(response), pricing),
+        "usage": None if response.llm is None else usage_payload(response.llm.usage, pricing),
         "response_path": str(response_path.relative_to(run_root)),
     }
 
@@ -391,7 +493,8 @@ def write_textify_smoke_artifacts(
     _write_json(run_dir / "response.json", response.to_json())
     rendered = render_textified_output(response)
     (run_dir / _textified_filename(response)).write_text(rendered, encoding="utf-8")
-    _write_json(run_dir / "usage.json", usage_payload(_require_llm_usage(response), pricing))
+    if response.llm is not None:
+        _write_json(run_dir / "usage.json", usage_payload(response.llm.usage, pricing))
     if stderr:
         (run_dir / "stderr.txt").write_text(stderr, encoding="utf-8")
     record = evaluator_input_record(
@@ -477,6 +580,14 @@ def _expected_markdown(case: TextifySmokeCase) -> str:
             "## Expected Suggested Paths",
             "",
             paths,
+            "",
+            "## Model Importance",
+            "",
+            str(case.model_importance),
+            "",
+            "## Model Ranking",
+            "",
+            "included" if case.participates_in_model_ranking else "coverage-only",
             "",
             "## Preservation Requirements",
             "",

@@ -1,0 +1,426 @@
+{
+  "cases": [
+    {
+      "case_id": "R-IMG-DASH-01",
+      "expect_llm_call": true,
+      "expected_output_format": "markdown",
+      "expected_status": "converted",
+      "expected_suggested_paths": [
+        "claude-code-usage-dashboard.md"
+      ],
+      "expected_textification_intent": "Extract the dashboard title, filters, metric cards, charts, recent-session table, and visible numeric values into Markdown.",
+      "fixture_kind": "checked_in",
+      "fixture_path": "real/r-img-dash-01.jpg",
+      "ground_truth_text": "Claude Code Usage Dashboard\nSessions 440\nTurns 18.0K\nInput tokens 617.2K\nOutput tokens 4.75M\nCache read 1.95B\nEst. cost $1588.30",
+      "input_mode": "artifact_path",
+      "mime_type": "image/jpeg",
+      "model_importance": 9,
+      "participates_in_model_ranking": true,
+      "preferred_output_format": "markdown",
+      "preservation_requirements": [
+        "Claude Code Usage Dashboard",
+        "440",
+        "18.0K",
+        "617.2K",
+        "4.75M",
+        "$1588.30"
+      ],
+      "sha256": "a74c7cb477b123bfc87dd97eb0c634786b6a4f537d387c2a96e5739d31d3118a",
+      "source_basenames": [
+        "imsgx-r0109-x1-image-2041595776074236328-photo-1.jpg"
+      ]
+    },
+    {
+      "case_id": "R-IMG-LLM-TABLE-01",
+      "expect_llm_call": true,
+      "expected_output_format": "markdown",
+      "expected_status": "converted",
+      "expected_suggested_paths": [
+        "local-llm-cheat-sheet.md"
+      ],
+      "expected_textification_intent": "Convert the dense local LLM cheat sheet into a Markdown table preserving model rows, weights, speed, context, use cases, and bottom line.",
+      "fixture_kind": "checked_in",
+      "fixture_path": "real/r-img-llm-table-01.jpg",
+      "ground_truth_text": "LOCAL LLM CHEAT SHEET\n128GB RAM\nQwen3.5-397B-A17B\nMistral Large 2411\nMiniMax-M2.7\nGLM-4.5-Air\nQwen3-VL-235B-A22B-Thinking\nBottom line: match it to your workflow.",
+      "input_mode": "artifact_path",
+      "mime_type": "image/jpeg",
+      "model_importance": 10,
+      "participates_in_model_ranking": true,
+      "preferred_output_format": "markdown",
+      "preservation_requirements": [
+        "LOCAL LLM CHEAT SHEET",
+        "128GB RAM",
+        "Qwen3.5-397B-A17B",
+        "MiniMax-M2.7",
+        "Qwen3-VL-235B-A22B-Thinking",
+        "Bottom line"
+      ],
+      "sha256": "9fc4f7a9c8958056c2aedac53d70614aeebfbffc64f1b9200b05a5eab1855de9",
+      "source_basenames": [
+        "imsgx-r0522-x3-image-2047647919449530731-photo-1.jpg"
+      ]
+    },
+    {
+      "case_id": "R-IMG-INFOGRAPHIC-01",
+      "expect_llm_call": true,
+      "expected_output_format": "markdown",
+      "expected_status": "converted",
+      "expected_suggested_paths": [
+        "hermes-agent.md"
+      ],
+      "expected_textification_intent": "Extract the chalkboard-style Hermes Agent infographic into structured Markdown with commands, section labels, provider lists, and gateway labels.",
+      "fixture_kind": "checked_in",
+      "fixture_path": "real/r-img-infographic-01.jpg",
+      "ground_truth_text": "Hermes Agent\nThe CLI AI Agent by Nous Research\nFrom zero to chat in 3 steps\ncurl -fsSL .../install.sh | bash\nPick Provider\nChat\nCore Tools\nAny model. No lock-in.\nMessaging gateways",
+      "input_mode": "artifact_path",
+      "mime_type": "image/jpeg",
+      "model_importance": 10,
+      "participates_in_model_ranking": true,
+      "preferred_output_format": "markdown",
+      "preservation_requirements": [
+        "Hermes Agent",
+        "curl -fsSL",
+        "Pick Provider",
+        "Core Tools",
+        "Any model. No lock-in.",
+        "Messaging gateways"
+      ],
+      "sha256": "0405a18638feeee817b4e4a3a71c39cfb2426fbb936f981bd8cd762768d7ebe3",
+      "source_basenames": [
+        "imsgx-r0393-x3-image-2045613907004535011-photo-1.jpg"
+      ]
+    },
+    {
+      "case_id": "R-IMG-PAPER-PAGE-01",
+      "expect_llm_call": true,
+      "expected_output_format": "markdown",
+      "expected_status": "converted",
+      "expected_suggested_paths": [
+        "openclaw-rl.md"
+      ],
+      "expected_textification_intent": "Extract the academic paper page with title, authors, GitHub link, abstract, figure caption, and diagram labels into Markdown.",
+      "fixture_kind": "checked_in",
+      "fixture_path": "real/r-img-paper-page-01.png",
+      "ground_truth_text": "OpenClaw-RL: Train Any Agent Simply by Talking\nYinjie Wang\nhttps://github.com/Gen-Verse/OpenClaw-RL\nEvery agent interaction generates a next-state signal\nFigure 1 OpenClaw-RL infrastructure overview",
+      "input_mode": "artifact_path",
+      "mime_type": "image/png",
+      "model_importance": 9,
+      "participates_in_model_ranking": true,
+      "preferred_output_format": "markdown",
+      "preservation_requirements": [
+        "OpenClaw-RL",
+        "Train Any Agent Simply by Talking",
+        "Gen-Verse/OpenClaw-RL",
+        "next-state signal",
+        "Figure 1"
+      ],
+      "sha256": "3989e8b2dbb1992196f6c3302667b3a98ff911c5c717773a101fd896e37e87b8",
+      "source_basenames": [
+        "imsgx-r0035-x2-image-2035315863163912332-photo-1.png"
+      ]
+    },
+    {
+      "case_id": "R-IMG-CHARTS-01",
+      "expect_llm_call": true,
+      "expected_output_format": "markdown",
+      "expected_status": "converted",
+      "expected_suggested_paths": [
+        "agent-benchmarks.md"
+      ],
+      "expected_textification_intent": "Extract both benchmark bar charts into Markdown tables with system names and percentages.",
+      "fixture_kind": "checked_in",
+      "fixture_path": "real/r-img-charts-01.jpg",
+      "ground_truth_text": "SpreadsheetBench\nAutoAgent 96.5%\nTetra-Beta-2 94.2%\nTerminalBench (GPT-5)\nAutoAgent 55.1%\nCodex CLI 49.6%",
+      "input_mode": "artifact_path",
+      "mime_type": "image/jpeg",
+      "model_importance": 8,
+      "participates_in_model_ranking": true,
+      "preferred_output_format": "markdown",
+      "preservation_requirements": [
+        "SpreadsheetBench",
+        "TerminalBench",
+        "AutoAgent 96.5%",
+        "AutoAgent 55.1%",
+        "Codex CLI 49.6%"
+      ],
+      "sha256": "6963044d99e19d448472a7e223c36cb85494db523b99b7547cfe6c9d13d0b778",
+      "source_basenames": [
+        "imsgx-r0084-x2-image-2040434869399138368-photo-1.jpg"
+      ]
+    },
+    {
+      "case_id": "R-IMG-TERMINAL-01",
+      "expect_llm_call": true,
+      "expected_output_format": "txt",
+      "expected_status": "converted",
+      "expected_suggested_paths": [
+        "claude-code-listing.log"
+      ],
+      "expected_textification_intent": "Transcribe the terminal session as a log, preserving command lines, permissions columns, file sizes, timestamps, and filenames.",
+      "fixture_kind": "checked_in",
+      "fixture_path": "real/r-img-terminal-01.png",
+      "ground_truth_text": "ls -alht cli.js.map\nls -alht src\ntotal 2304\nmain.tsx\ncommands\nQueryEngine.ts\ncontext.ts",
+      "input_mode": "artifact_path",
+      "mime_type": "image/png",
+      "model_importance": 8,
+      "participates_in_model_ranking": true,
+      "preferred_output_format": "txt",
+      "preservation_requirements": [
+        "ls -alht",
+        "total 2304",
+        "main.tsx",
+        "commands",
+        "QueryEngine.ts",
+        "context.ts"
+      ],
+      "sha256": "e1c5b1945a3db39ed228e143b3202da12b86f936f7c55f1407e9aa5fb617b7fa",
+      "source_basenames": [
+        "imsgx-r0057-x1-image-2039077799643005198-photo-1.png"
+      ]
+    },
+    {
+      "case_id": "R-IMG-ASCII-DIAGRAM-01",
+      "expect_llm_call": true,
+      "expected_output_format": "txt",
+      "expected_status": "converted",
+      "expected_suggested_paths": [
+        "distributed-bloomberg-autoquant.txt"
+      ],
+      "expected_textification_intent": "Preserve the ASCII-style diagram layout and result box as plain text instead of summarizing it away.",
+      "fixture_kind": "checked_in",
+      "fixture_path": "real/r-img-ascii-diagram-01.png",
+      "ground_truth_text": "DISTRIBUTED BLOOMBERG\nAutoQuant\nAgent Macro Sector Alpha Risks\nDARWINIAN SELECTION\n4 factors · risk parity\nSharpe 1.32\n1,896 experiments in 36 hours",
+      "input_mode": "artifact_path",
+      "mime_type": "image/png",
+      "model_importance": 8,
+      "participates_in_model_ranking": true,
+      "preferred_output_format": "txt",
+      "preservation_requirements": [
+        "DISTRIBUTED BLOOMBERG",
+        "AutoQuant",
+        "DARWINIAN SELECTION",
+        "Sharpe 1.32",
+        "1,896 experiments"
+      ],
+      "sha256": "353bc7c7e176f785ef3d09d0b8ae088c6f299c4e971010301ff2bd9d84f40c50",
+      "source_basenames": [
+        "imsgx-r0013-x3-image-2032330665081839791-photo-1.png"
+      ]
+    },
+    {
+      "case_id": "R-IMG-COMPARISON-TABLE-01",
+      "expect_llm_call": true,
+      "expected_output_format": "markdown",
+      "expected_status": "converted",
+      "expected_suggested_paths": [
+        "agent-comparison.md"
+      ],
+      "expected_textification_intent": "Extract the OpenClaw/Hermes/Paperclip comparison as a Markdown table preserving row and column alignment.",
+      "fixture_kind": "checked_in",
+      "fixture_path": "real/r-img-comparison-table-01.png",
+      "ground_truth_text": "Head-to-Head\nDimension | OpenClaw | Hermes | Paperclip\nWhat it is\nGitHub stars\nSecurity\nInstall",
+      "input_mode": "artifact_path",
+      "mime_type": "image/png",
+      "model_importance": 8,
+      "participates_in_model_ranking": true,
+      "preferred_output_format": "markdown",
+      "preservation_requirements": [
+        "Head-to-Head",
+        "Dimension",
+        "OpenClaw",
+        "Hermes",
+        "Paperclip",
+        "GitHub stars",
+        "Install"
+      ],
+      "sha256": "26f885c49a5b46c7827858bd74e79ca5938ac4e083bae507712c64180299e509",
+      "source_basenames": [
+        "imsgx-r0301-x3-image-2042320566066266535-photo-1.png"
+      ]
+    },
+    {
+      "case_id": "R-IMG-NO-TEXT-REAL-01",
+      "expect_llm_call": true,
+      "expected_output_format": "markdown",
+      "expected_status": "no_text_found",
+      "expected_suggested_paths": [],
+      "expected_textification_intent": "Return no_text_found for a real photo with no readable text and do not invent a visual description.",
+      "fixture_kind": "checked_in",
+      "fixture_path": "real/r-img-no-text-real-01.jpg",
+      "ground_truth_text": "",
+      "input_mode": "artifact_path",
+      "mime_type": "image/jpeg",
+      "model_importance": 5,
+      "participates_in_model_ranking": true,
+      "preferred_output_format": "markdown",
+      "preservation_requirements": [
+        "no_text_found",
+        "no invented description"
+      ],
+      "sha256": "80c99366dc83288925d6653b25e086ee894e8098469f7f785e6e1e984e761107",
+      "source_basenames": [
+        "imsgx-r0298-x1-image-2043483564348731461-photo-1.jpg"
+      ]
+    },
+    {
+      "case_id": "C-IMG-DIR-TREE-01",
+      "expect_llm_call": true,
+      "expected_output_format": "mixed",
+      "expected_status": "converted",
+      "expected_suggested_paths": [
+        "home/important/openclaw-rl.md",
+        "home/important/agent-comparison.md",
+        "home/trivial/claude-code-listing.log"
+      ],
+      "expected_textification_intent": "Split one composite screenshot into exactly three suggested files in the visible nested relative directory structure.",
+      "fixture_kind": "checked_in",
+      "fixture_path": "generated/c-img-dir-tree-01.png",
+      "ground_truth_text": "home/important/openclaw-rl.md\nOpenClaw-RL: Train Any Agent Simply by Talking\nhome/important/agent-comparison.md\nHead-to-Head\nhome/trivial/claude-code-listing.log\nls -alht src",
+      "input_mode": "artifact_path",
+      "mime_type": "image/png",
+      "model_importance": 10,
+      "participates_in_model_ranking": true,
+      "preferred_output_format": "auto",
+      "preservation_requirements": [
+        "exactly three suggested files",
+        "home/important/openclaw-rl.md",
+        "home/important/agent-comparison.md",
+        "home/trivial/claude-code-listing.log",
+        "no cross-section bleed",
+        "no extra generated files"
+      ],
+      "sha256": "0664c813d92eb3562bb8a6a990b9c05634f452a5b245233038aff43fafc42400",
+      "source_basenames": [
+        "imsgx-r0035-x2-image-2035315863163912332-photo-1.png",
+        "imsgx-r0301-x3-image-2042320566066266535-photo-1.png",
+        "imsgx-r0057-x1-image-2039077799643005198-photo-1.png"
+      ]
+    },
+    {
+      "case_id": "R-PDF-PAPER-01",
+      "expect_llm_call": true,
+      "expected_output_format": "markdown",
+      "expected_status": "converted",
+      "expected_suggested_paths": [
+        "nemotron-3-super.md"
+      ],
+      "expected_textification_intent": "Extract the scientific PDF into Markdown with title, abstract, sections, tables or figure captions, and reading order.",
+      "fixture_kind": "checked_in",
+      "fixture_path": "real/r-pdf-paper-01.pdf",
+      "ground_truth_text": "Nemotron 3 Super: Open, Efficient Mixture-of-Experts Hybrid Mamba-Transformer Model for Agentic Reasoning\narXiv:2604.12374\nNVIDIA",
+      "input_mode": "artifact_path",
+      "mime_type": "application/pdf",
+      "model_importance": 10,
+      "participates_in_model_ranking": true,
+      "preferred_output_format": "markdown",
+      "preservation_requirements": [
+        "Nemotron 3 Super",
+        "Mixture-of-Experts",
+        "Hybrid Mamba-Transformer",
+        "Agentic Reasoning",
+        "NVIDIA"
+      ],
+      "sha256": "fa7e8a9a1a8f9f716e38e46170371d4bc67c3f6d1ac3e4857c574e911f0e107f",
+      "source_basenames": [
+        "imsgx-r0329-x3-document-pdf-2604-12374.12374"
+      ]
+    },
+    {
+      "case_id": "R-HTML-ARXIV-01",
+      "expect_llm_call": false,
+      "expected_output_format": "markdown",
+      "expected_status": "skipped_text_media",
+      "expected_suggested_paths": [],
+      "expected_textification_intent": "Coverage-only HTML source case: skip as deterministic text media without calling an LLM.",
+      "fixture_kind": "checked_in",
+      "fixture_path": "real/r-html-arxiv-01.html",
+      "ground_truth_text": "[2603.10165] OpenClaw-RL: Train Any Agent Simply by Talking",
+      "input_mode": "artifact_path",
+      "mime_type": "text/html",
+      "model_importance": 1,
+      "participates_in_model_ranking": false,
+      "preferred_output_format": "auto",
+      "preservation_requirements": [
+        "skipped_text_media",
+        "no provider call"
+      ],
+      "sha256": "102ef094fa45008eb53dac5d613950ec099ae29049fb561c77157f0420071f97",
+      "source_basenames": [
+        "imsgx-r0035-x3-htmlpage-abs-2603-10165.html"
+      ]
+    },
+    {
+      "case_id": "R-HTML-GITHUB-README-01",
+      "expect_llm_call": false,
+      "expected_output_format": "markdown",
+      "expected_status": "skipped_text_media",
+      "expected_suggested_paths": [],
+      "expected_textification_intent": "Coverage-only complex HTML page case: skip as deterministic text media without calling an LLM.",
+      "fixture_kind": "checked_in",
+      "fixture_path": "real/r-html-github-readme-01.html",
+      "ground_truth_text": "gstack/README.md",
+      "input_mode": "artifact_path",
+      "mime_type": "text/html",
+      "model_importance": 1,
+      "participates_in_model_ranking": false,
+      "preferred_output_format": "auto",
+      "preservation_requirements": [
+        "skipped_text_media",
+        "no provider call"
+      ],
+      "sha256": "245700b82311141fcf9143e0f8844ca96d6efbd4f8d261148de4951ca291bd84",
+      "source_basenames": [
+        "imsgx-r0510-x3-htmlpage-blob-7911b7b974a1cef2794473a77ea93d0ac351b8c2-readme-md.html"
+      ]
+    },
+    {
+      "case_id": "R-JSON-XARTICLE-CODE-01",
+      "expect_llm_call": false,
+      "expected_output_format": "markdown",
+      "expected_status": "skipped_text_media",
+      "expected_suggested_paths": [],
+      "expected_textification_intent": "Coverage-only JSON source case: skip as deterministic text media without calling an LLM.",
+      "fixture_kind": "checked_in",
+      "fixture_path": "real/r-json-xarticle-code-01.json",
+      "ground_truth_text": "tv status\ntv quote\ntv pine analyze\ntv stream quote",
+      "input_mode": "artifact_path",
+      "mime_type": "application/json",
+      "model_importance": 1,
+      "participates_in_model_ranking": false,
+      "preferred_output_format": "auto",
+      "preservation_requirements": [
+        "skipped_text_media",
+        "no provider call"
+      ],
+      "sha256": "69f94ac3515718a1a5aed67d20aed6b6a4ceafca3db50f7104f5e33862943241",
+      "source_basenames": [
+        "imsgx-r0074-x3-xarticle-i-article-2039065099554430976.json"
+      ]
+    },
+    {
+      "case_id": "R-ZIP-REPO-01",
+      "expect_llm_call": false,
+      "expected_output_format": "markdown",
+      "expected_status": "unsupported_media",
+      "expected_suggested_paths": [],
+      "expected_textification_intent": "Coverage-only archive source case: reject as unsupported media without calling an LLM.",
+      "fixture_kind": "checked_in",
+      "fixture_path": "real/r-zip-repo-01.zip",
+      "ground_truth_text": "",
+      "input_mode": "artifact_path",
+      "mime_type": "application/zip",
+      "model_importance": 1,
+      "participates_in_model_ranking": false,
+      "preferred_output_format": "auto",
+      "preservation_requirements": [
+        "unsupported_media",
+        "no provider call"
+      ],
+      "sha256": "b3caf0cc25a77138020d670e536279f575a060ee02022be5e7be11f3725cfcb1",
+      "source_basenames": [
+        "imsgx-r0411-x1-repo-openai-openai-agents-python.zip"
+      ]
+    }
+  ],
+  "version": 1
+}

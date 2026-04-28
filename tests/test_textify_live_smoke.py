@@ -89,9 +89,13 @@ def test_live_codex_cli_textify_case_matrix(textify_smoke_run_root: Path, case, 
         pricing=caller_config.pricing_config,
     )
     assert response.request_id == request.request_id
-    assert response.llm is not None
-    assert response.llm.provider == ProviderName.CODEX_CLI
-    assert response.llm.model == caller_config.model
+    assert response.source.status.value == case.expected_status
+    if case.expect_llm_call:
+        assert response.llm is not None
+        assert response.llm.provider == ProviderName.CODEX_CLI
+        assert response.llm.model == caller_config.model
+    else:
+        assert response.llm is None
     if case.expected_suggested_paths:
         suggested_paths = [suggested_file.suggested_path for suggested_file in response.source.suggested_files]
         assert suggested_paths

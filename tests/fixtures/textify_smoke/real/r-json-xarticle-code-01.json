@@ -1,0 +1,94 @@
+{
+  "article": {
+    "cover_media": "3_2039071547558670336",
+    "entities": {
+      "code": [
+        {
+          "code": "# reading your chart\ntv status\ntv quote\ntv ohlcv --summary\ntv data lines\ntv data values\n\n# navigation\ntv symbol AAPL\ntv timeframe D\ntv pane layout 2x2\ntv pane symbol 1 ES1!\ntv layout switch \"NQ\"\n\n# pine script\ntv pine set < script.pine\ntv pine compile\ntv pine analyze\ntv pine check\ntv pine save\n\n# streaming\ntv stream quote | jq '.close'\ntv stream bars\ntv stream lines --filter \"NY Levels\"\ntv stream tables --filter Profiler\ntv stream all\n\n# pine CI in one line\ncat script.pine | tv pine analyze && cat script.pine | tv pine check",
+          "content": "```bash\n# reading your chart\ntv status\ntv quote\ntv ohlcv --summary\ntv data lines\ntv data values\n\n# navigation\ntv symbol AAPL\ntv timeframe D\ntv pane layout 2x2\ntv pane symbol 1 ES1!\ntv layout switch \"NQ\"\n\n# pine script\ntv pine set < script.pine\ntv pine compile\ntv pine analyze\ntv pine check\ntv pine save\n\n# streaming\ntv stream quote | jq '.close'\ntv stream bars\ntv stream lines --filter \"NY Levels\"\ntv stream tables --filter Profiler\ntv stream all\n\n# pine CI in one line\ncat script.pine | tv pine analyze && cat script.pine | tv pine check\n```",
+          "language": "bash"
+        }
+      ],
+      "urls": [
+        {
+          "text": "line.new"
+        },
+        {
+          "text": "label.new"
+        },
+        {
+          "text": "table.new"
+        },
+        {
+          "text": "box.new"
+        },
+        {
+          "text": "https://github.com/tradesdontlie/tradingview-mcp"
+        }
+      ]
+    },
+    "media_entities": [
+      "3_2039069703306616832",
+      "3_2039068693620260864",
+      "3_2039069223797063680",
+      "3_2039068820023955456",
+      "13_2039076510817038336"
+    ],
+    "plain_text": " \nTradingView doesn't have a public API. That's just the reality.\n\nAfter experimenting and building hundreds of different indicators I needed a solution to improve my workflow to allow my coding agent to interact with Tradingview for me. No more copy and pasting or manually checking indicator values myself. I needed a Pine Script development workflow with AI in the loop way of working with my indicators and strategies inside the charting platform that wasn't a shitty ui click automation... \nThe desktop app is built on Electron, which runs on Chromium, which has a debugging interface built into it called Chrome DevTools Protocol. It's in every Electron app \u2014 VS Code, Slack, Discord, all of them. It's off by default. One flag at launch turns it on. That's the door.\nI built this as a research project. I wanted to see what actually happens when you give an LLM structured access to a live charting platform. Can Claude read chart data accurately? Where does it get confused? Is natural language a useful way to write Pine Script? What breaks when the agent is working with live data in real time?\nThe result is 78 MCP tools and a full CLI. This is what I found. \n \nIf any of this sounds interesting to you, you can explore it on your own terms. I'll explain what's technically possible and how it all works. What you do with it is up to you.\nI. How It Works\n \nThree pieces, all running locally on your machine.\nClaude Code talks to a Node.js MCP server. That server connects to your running TradingView Desktop app over Chrome DevTools Protocol on port 9222. CDP is a standard Google debugging interface built into every Chromium app. Off by default. One flag turns it on.\nNothing touches TradingView's servers. No data leaves your machine. The port stays closed until you deliberately open it.\nThe whole tool set also ships as a tv CLI, JSON output, pipe-friendly, works from any terminal or shell script.\nOne thing worth knowing upfront: this accesses undocumented internal TradingView APIs through the Electron debug interface. TradingView can change those internals in any update without notice. If you use this and want it to stay stable, pin your TradingView Desktop version.\nII. What Claude Can Actually See\n\n\n \nThis is the part that surprised me most when I started building it.\nBeyond the obvious stuff like symbol, timeframe, and indicator values, Claude can read the actual drawing objects that Pine Script indicators put on your chart. The line.new() calls, label.new(), table.new(), box.new(). Anything your indicator draws on screen, Claude can read back as structured data. This works on protected indicators too. You just pass a filter targeting the indicator by name and you get back every price level, every text annotation, full table contents, every drawn zone.\nAsk Claude \"what levels is my NY Sessions indicator showing?\" and it reads them. \"What does the session stats table say?\" It reads that too.\nThe full picture of what's available: current symbol and timeframe, all indicator names and IDs, real-time OHLC and volume, up to 500 price bars or a compact summary, all data window values, Pine drawings of every type, order book depth, strategy tester results and trade list, symbol metadata, and screenshots of any chart region.\nWorth saying clearly: all of this data is already on your screen the moment TradingView is open. The app is displaying it. This tool just makes it readable to an LLM.\nIII. What's Technically Possible\n\n\n \nBefore going into this section: be aware of TradingView's Terms of Service before you build anything. The data these tools surface is data you already have access to as a paying subscriber, displayed in an app running on your own machine. What you do with it programmatically is yours to reason through against their terms. This is a research project and these are the possibilities I found.\nPine Script development with AI in the loop. This is the one that made me keep working on it. You describe what you want, Claude writes the script, injects it into the Pine editor, compiles it, reads the errors back, fixes them, and recompiles. That loop runs until the script is clean. The whole time it has full context of your current chart and whatever indicators are on it. There's also offline static analysis before compile and a server-side compile check that doesn't even need to touch the chart. For anyone who has spent an afternoon bouncing between a text editor and the Pine editor hunting a type mismatch, this changes the workflow considerably. I still personally code in VS code terminal using Claude Code CLI because its easy to keep all my indicators in one repo for organizational purposes, but now instead of copy and pasting my indicator back and forth Claude can send it to TV and compile it and screen shot it or use the indicator data with the OHLC data and confirm what I'm trying to implement is correct.... within reason of course. \nYour chart as a local data source. The streaming commands poll your running TradingView Desktop via CDP on localhost and output JSONL, one JSON object per line. You can pipe that into Python, Node, shell scripts, jq filters, whatever you want to build locally. Set up a 2x2 grid with NQ, ES, YM, and GC and stream all four panes simultaneously. The data goes from your app to a process on your own machine, nowhere else.\nScripting repetitive chart tasks. Every tool is available as a CLI command with consistent JSON output. Anything you do manually on repeat is a candidate for a script. Multi-symbol screens, screenshot runs, morning layout setup, chart state snapshots, batch indicator configuration. The output composes with anything that reads stdin.\nIndicator validation. Write a script, compile it, read the values back, check that the math matches your expectations. Loop through input parameters and read the output each time. Run the same indicator across multiple symbols and timeframes. Read strategy tester metrics after each compile. The actual workflow of verifying your indicators rather than assuming they work.\nReplay with structured logging. Step through historical bars, log the indicator values at each step to JSONL, record your trade decisions, capture screenshots at entries and exits. A proper practice record instead of just clicking through replay and hoping something sticks.\nIV. The CLI\nEvery MCP tool is also a terminal command. The whole thing ships as a tv CLI with JSON output that pipes anywhere.\n \ntv stream all is the most interesting thing to play with from a research perspective. Set up a multi-pane layout, run that command, and you have every symbol streaming simultaneously as JSONL into whatever you want downstream.\nV. Getting It Running\nYou need Node.js 18+ installed and TradingView Desktop with a valid subscription. After that, just give Claude this prompt and it handles the whole install:\n\"Install the TradingView MCP server. Clone and explore https://github.com/tradesdontlie/tradingview-mcp, run npm install, add to my MCP config at ~/.claude/.mcp.json, and launch TradingView with the debug port.\"\nOnce it's done, verify the connection:\n\"Use tv_health_check to confirm TradingView is connected.\"\nThen try it:\n\"What's on my chart right now?\"\n\"Write a Pine Script VWAP indicator and add it to my chart.\"\n\"Set up a 2x2 grid with NQ, ES, YM, and GC.\"\nThat's the whole setup. Claude installs it, Claude runs it. You just describe what you want. The only thing limiting you is your creativity. \n\nThis isn't an end-all, be-all solution that's going to solve all your problems. This is just a tool to connect your charting platform to your large language model. You're still going to need to be able to logically come up with your own indicators ideas or models that you want to code, or know how to use the indicator data in your trading methodologies, or any of these things. This isn't going to solve all of your trading problems. This is just a technical tool... So, please don't forget that and be smart with whatever that you are trying to accomplish. \nPersonal research project. Not affiliated with TradingView Inc. Requires a valid TradingView subscription. Not financial advice.",
+    "preview_text": "TradingView doesn't have a public API. That's just the reality.\n\nAfter experimenting and building hundreds of different indicators I needed a solution to improve my workflow to allow my coding agent",
+    "title": "How to Connect Claude to TradingView"
+  },
+  "cover_media": {
+    "height": 394,
+    "media_key": "3_2039071547558670336",
+    "type": "photo",
+    "url": "https://pbs.twimg.com/media/HEw8xN_XMAAVr-H.jpg",
+    "width": 985
+  },
+  "inline_media": [
+    {
+      "height": 632,
+      "media_key": "3_2039069703306616832",
+      "type": "photo",
+      "url": "https://pbs.twimg.com/media/HEw7F3naIAACKFd.png",
+      "width": 853
+    },
+    {
+      "height": 649,
+      "media_key": "3_2039068693620260864",
+      "type": "photo",
+      "url": "https://pbs.twimg.com/media/HEw6LGPbAAAk-TR.png",
+      "width": 836
+    },
+    {
+      "height": 632,
+      "media_key": "3_2039069223797063680",
+      "type": "photo",
+      "url": "https://pbs.twimg.com/media/HEw6p9TbAAAlNZS.png",
+      "width": 832
+    },
+    {
+      "height": 172,
+      "media_key": "3_2039068820023955456",
+      "type": "photo",
+      "url": "https://pbs.twimg.com/media/HEw6SdIaUAAx4bI.png",
+      "width": 746
+    },
+    {
+      "height": 504,
+      "media_key": "13_2039076510817038336",
+      "preview_image_url": "https://pbs.twimg.com/amplify_video_thumb/2039076510817038336/img/6_xrnmbJbiZwCXSx.jpg",
+      "type": "video",
+      "width": 880
+    }
+  ],
+  "post": {
+    "author_id": "1279059150438367233",
+    "created_at": "2026-03-31T20:40:28.000Z",
+    "id": "2039080409581891890",
+    "text": "https://t.co/Ddl8b6fLX2"
+  },
+  "public_article_url": "https://x.com/Tradesdontlie/article/2039080409581891890",
+  "root_post_url": "https://x.com/Tradesdontlie/status/2039080409581891890",
+  "source_url": "https://x.com/i/article/2039065099554430976"
+}

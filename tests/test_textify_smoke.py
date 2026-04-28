@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 
@@ -24,6 +25,8 @@ from textify_smoke_helpers import (
     TEXTIFY_NOOP_SMOKE_CASE,
     TEXTIFY_SMOKE_CALLERS,
     TEXTIFY_SMOKE_CASES,
+    TEXTIFY_SMOKE_FIXTURE_MANIFEST,
+    TEXTIFY_SMOKE_FIXTURE_ROOT,
     ModelPricing,
     TextifySmokeCase,
     TextifySmokeHarnessError,
@@ -119,7 +122,8 @@ def test_textify_smoke_case_matrix_is_reviewed_shape() -> None:
         "textifier_codex_gpt_54_mini",
         "textifier_codex_gpt_55",
     )
-    assert [case.case_id for case in TEXTIFY_SMOKE_CASES] == [
+    case_ids = [case.case_id for case in TEXTIFY_SMOKE_CASES]
+    assert case_ids[:9] == [
         "C-IMG-TXT-01",
         "C-IMG-CODE-01",
         "C-IMG-CODE-02",
@@ -130,7 +134,50 @@ def test_textify_smoke_case_matrix_is_reviewed_shape() -> None:
         "C-IMG-RECEIPT-01",
         "C-IMG-NO-TEXT-01",
     ]
+    assert case_ids[9:] == [
+        "R-IMG-DASH-01",
+        "R-IMG-LLM-TABLE-01",
+        "R-IMG-INFOGRAPHIC-01",
+        "R-IMG-PAPER-PAGE-01",
+        "R-IMG-CHARTS-01",
+        "R-IMG-TERMINAL-01",
+        "R-IMG-ASCII-DIAGRAM-01",
+        "R-IMG-COMPARISON-TABLE-01",
+        "R-IMG-NO-TEXT-REAL-01",
+        "C-IMG-DIR-TREE-01",
+        "R-PDF-PAPER-01",
+        "R-HTML-ARXIV-01",
+        "R-HTML-GITHUB-README-01",
+        "R-JSON-XARTICLE-CODE-01",
+        "R-ZIP-REPO-01",
+    ]
+    assert all(case.model_importance == 1 for case in TEXTIFY_SMOKE_CASES[:9])
+    assert all(case.participates_in_model_ranking for case in TEXTIFY_SMOKE_CASES[:20])
+    assert [case.model_importance for case in TEXTIFY_SMOKE_CASES[9:20]] == [9, 10, 10, 9, 8, 8, 8, 8, 5, 10, 10]
+    assert all(not case.participates_in_model_ranking for case in TEXTIFY_SMOKE_CASES[20:])
     assert TEXTIFY_NOOP_SMOKE_CASE.case_id == "C-TEXT-NOOP-01"
+    assert TEXTIFY_NOOP_SMOKE_CASE.model_importance == 1
+    assert TEXTIFY_NOOP_SMOKE_CASE.expect_llm_call is False
+
+
+def test_textify_real_fixture_manifest_matches_checked_in_files() -> None:
+    payload = json.loads(TEXTIFY_SMOKE_FIXTURE_MANIFEST.read_text(encoding="utf-8"))
+
+    assert payload["version"] == 1
+    assert len(payload["cases"]) == 15
+    for case in TEXTIFY_SMOKE_CASES[9:]:
+        assert case.fixture_path is not None
+        fixture_path = TEXTIFY_SMOKE_FIXTURE_ROOT / case.fixture_path
+        assert fixture_path.exists()
+        assert hashlib.sha256(fixture_path.read_bytes()).hexdigest() == case.fixture_sha256
+        assert 1 <= case.model_importance <= 10
+    composite = next(case for case in TEXTIFY_SMOKE_CASES if case.case_id == "C-IMG-DIR-TREE-01")
+    assert composite.expected_suggested_paths == (
+        "home/important/openclaw-rl.md",
+        "home/important/agent-comparison.md",
+        "home/trivial/claude-code-listing.log",
+    )
+    assert composite.model_importance == 10
 
 
 def test_textify_smoke_config_selection_and_prompt_requirements() -> None:
@@ -219,14 +266,31 @@ def test_textify_smoke_models_reject_invalid_values() -> None:
             ground_truth_text="x",
             preservation_requirements=(),
         )
+    with pytest.raises(ValueError, match="model_importance"):
+        TextifySmokeCase(
+            case_id="case",
+            input_mode="artifact_path",
+            fixture_kind="png_text",
+            filename="x.png",
+            mime_type="image/png",
+            preferred_output_format="txt",
+            expected_output_format="txt",
+            expected_suggested_paths=(),
+            expected_textification_intent="x",
+            ground_truth_text="x",
+            preservation_requirements=(),
+            model_importance=11,
+        )
 
 
 def test_generated_fixtures_and_requests_include_metadata(tmp_path: Path) -> None:
     image_case = TEXTIFY_SMOKE_CASES[0]
     noop_case = TEXTIFY_NOOP_SMOKE_CASE
+    checked_in_case = next(case for case in TEXTIFY_SMOKE_CASES if case.case_id == "C-IMG-DIR-TREE-01")
 
     image_source = write_textify_smoke_fixture(image_case, tmp_path)
     noop_source = write_textify_smoke_fixture(noop_case, tmp_path)
+    checked_in_source = write_textify_smoke_fixture(checked_in_case, tmp_path)
     request = build_textify_smoke_request(image_case, TEXTIFY_SMOKE_CALLERS[0], image_source)
 
     assert request.llm_caller == "textifier_codex_gpt_54_nano"
@@ -235,6 +299,8 @@ def test_generated_fixtures_and_requests_include_metadata(tmp_path: Path) -> Non
     assert Path(image_source.path).read_bytes().startswith(b"\x89PNG")
     assert Path(noop_source.path).suffix == ".txt"
     assert Path(noop_source.path).read_text(encoding="utf-8").startswith("ALREADY TEXT")
+    assert Path(checked_in_source.path).read_bytes().startswith(b"\x89PNG")
+    assert checked_in_source.sha256 == checked_in_case.fixture_sha256
     assert fixture_metadata(image_source)["sha256"] == image_source.sha256
     assert "Ground Truth Text" in (tmp_path / "cases" / image_case.case_id / "expected.md").read_text(
         encoding="utf-8"
@@ -379,6 +445,9 @@ def test_evaluator_input_record_and_artifact_retention(tmp_path: Path) -> None:
     assert record["rendered_textified_text"] == "DEPLOY NOTE\nRUN UV SYNC"
     assert record["usage"]["api_equivalent_cost_usd"] == pytest.approx(0.0002115)
     assert record["suggested_files"][0]["suggested_path"] == "note.txt"
+    assert record["model_importance"] == 1
+    assert record["participates_in_model_ranking"] is True
+    assert record["expected_status"] == "converted"
     assert written_record == record
     assert json.loads(
         (tmp_path / "runs" / "C-IMG-TXT-01" / "textifier_codex_gpt_54_mini" / "request.json").read_text(
@@ -404,3 +473,42 @@ def test_evaluator_input_record_and_artifact_retention(tmp_path: Path) -> None:
     evaluator_lines = (tmp_path / "evaluation" / "evaluator-input.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(evaluator_lines) == 1
     assert json.loads(evaluator_lines[0])["case_id"] == "C-IMG-TXT-01"
+
+
+def test_artifact_retention_supports_coverage_only_cases_without_llm_usage(tmp_path: Path) -> None:
+    _, caller_config = select_codex_textify_caller(repo_root() / "config.example.codex_cli.json")
+    case = next(case for case in TEXTIFY_SMOKE_CASES if case.case_id == "R-ZIP-REPO-01")
+    source = write_textify_smoke_fixture(case, tmp_path)
+    request = build_textify_smoke_request(case, caller_config.name, source)
+    assert source.sha256 is not None
+    response = TextifyResponse(
+        request_id=request.request_id,
+        source=TextifiedSource(
+            name=source.name,
+            input_mime_type=source.mime_type,
+            source_sha256=source.sha256,
+            textification_required=True,
+            status="unsupported_media",
+            suggested_files=[],
+            warnings=["unsupported media type for textify v1"],
+        ),
+        llm=None,
+        warnings=[],
+    )
+
+    record = write_textify_smoke_artifacts(
+        run_root=tmp_path,
+        case=case,
+        caller_config=caller_config,
+        source=source,
+        request=request,
+        response=response,
+        pricing=make_pricing(),
+    )
+
+    run_dir = tmp_path / "runs" / "R-ZIP-REPO-01" / "textifier_codex_gpt_54_mini"
+    assert record["usage"] is None
+    assert record["participates_in_model_ranking"] is False
+    assert record["expected_status"] == "unsupported_media"
+    assert not (run_dir / "usage.json").exists()
+    assert (run_dir / "textified.md").read_text(encoding="utf-8") == ""
