@@ -170,13 +170,14 @@ Typer may handle usage errors directly, but tests should assert user-visible beh
 
 ## `textify`
 
-The `textify` subcommand converts one local non-text media artifact, or a
-structured textify request JSON file, into source-language text.
+The `textify` subcommand converts one local source artifact, or a structured
+single-source textify request JSON file, into source-language text.
 
 Primary examples:
 
 ```text
 uv run python -m curio textify screenshot.png
+uv run python -m curio textify --input-file screenshot.png
 uv run python -m curio textify --input-json textify-request.json --json
 uv run python -m curio textify screenshot.png --preferred-output-format markdown --stats
 ```
@@ -184,12 +185,15 @@ uv run python -m curio textify screenshot.png --preferred-output-format markdown
 Input modes:
 
 - local artifact path as the positional argument
-- structured textify request JSON from `--input-json`
+- local artifact path from `--input-file`
+- structured single-source textify request JSON from `--input-json`
 
 Exactly one input mode should be used.
 
 Core flags:
 
+- `--input-file PATH`
+  Read a local media artifact path from an option instead of the positional argument.
 - `--input-json PATH`
   Read the structured JSON request defined in [TEXTIFY.md](TEXTIFY.md).
 - `--json`
@@ -210,12 +214,14 @@ Core flags:
   Override the named LLM caller for this run, such as `textifier_codex_gpt_54_mini`.
 
 LLM caller resolution precedence is CLI `--llm-caller`, structured JSON
-`llm_caller`, then `config.json` `textify.llm_caller`. If every artifact is
+`llm_caller`, then `config.json` `textify.llm_caller`. If the source is
 deterministically skipped or unsupported, no LLM caller is required.
 
-For one converted suggested file without `--json`, stdout contains that file's
-text plus a trailing newline. For structured input, `--json`, or multiple/no
-suggested files, stdout contains the full textify response JSON.
+For a skipped text-media source without `--json`, stderr contains a compact
+warning and stdout is empty. For one converted suggested file without `--json`,
+stdout contains that file's text plus a trailing newline. For structured input,
+`--json`, or multiple/no suggested files, stdout contains the full textify
+response JSON.
 
 ## `curate`
 

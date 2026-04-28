@@ -1,4 +1,4 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import cast
 
 from jsonschema import Draft202012Validator, FormatChecker
@@ -8,21 +8,21 @@ from curio.llm_caller import LlmResponse, LlmStatus
 from curio.textify.adapter import textify_model_output_schema
 from curio.textify.media import effective_mime_type, source_sha256
 from curio.textify.models import (
-    Artifact,
     JsonValue,
     SuggestedTextFile,
-    TextifiedArtifact,
+    TextifiedSource,
     TextifyRequest,
     TextifyResponseError,
+    TextifySource,
     TextifyStatus,
 )
 
 
-def textified_artifacts_from_llm_response(
+def textified_source_from_llm_response(
     request: TextifyRequest,
-    artifact: Artifact,
+    source: TextifySource,
     response: LlmResponse,
-) -> tuple[TextifiedArtifact, ...]:
+) -> TextifiedSource:
     if response.request_id != request.request_id:
         raise TextifyResponseError("LLM response request_id must match textify request_id")
     if response.status != LlmStatus.SUCCEEDED:
@@ -36,12 +36,9 @@ def textified_artifacts_from_llm_response(
     if output_request_id != request.request_id:
         raise TextifyResponseError("LLM output request_id must match textify request_id")
 
-    model_artifacts = tuple(
-        _model_artifact_from_json(item)
-        for item in _require_list(_require_field(payload, "artifacts"), "artifacts")
-    )
-    validate_textified_model_artifacts((artifact,), model_artifacts)
-    return tuple(_response_artifact_from_model(artifact, model_artifact) for model_artifact in model_artifacts)
+    model_source = _model_source_from_json(_require_field(payload, "source"))
+    validate_textified_model_source(source, model_source)
+    return _response_source_from_model(source, model_source)
 
 
 def validate_textify_model_output(value: JsonValue) -> None:
@@ -52,90 +49,65 @@ def validate_textify_model_output(value: JsonValue) -> None:
         raise TextifyResponseError(f"LLM output failed textify schema validation: {exc.message}") from exc
 
 
-def validate_textified_model_artifacts(
-    input_artifacts: Sequence[Artifact],
-    model_artifacts: Sequence[Mapping[str, JsonValue]],
+def validate_textified_model_source(
+    input_source: TextifySource,
+    model_source: Mapping[str, JsonValue],
 ) -> None:
-    model_artifacts = tuple(_model_artifact_from_json(model_artifact) for model_artifact in model_artifacts)
-    input_ids = tuple(artifact.artifact_id for artifact in input_artifacts)
-    output_ids = tuple(_model_artifact_id(model_artifact) for model_artifact in model_artifacts)
-    duplicated_ids = _duplicated_ids(output_ids)
-    if duplicated_ids:
-        raise TextifyResponseError(f"duplicate textified artifact ids: {_format_ids(duplicated_ids)}")
-    missing_ids = tuple(artifact_id for artifact_id in input_ids if artifact_id not in output_ids)
-    if missing_ids:
-        raise TextifyResponseError(f"missing textified artifact ids: {_format_ids(missing_ids)}")
-    extra_ids = tuple(artifact_id for artifact_id in output_ids if artifact_id not in input_ids)
-    if extra_ids:
-        raise TextifyResponseError(f"unexpected textified artifact ids: {_format_ids(extra_ids)}")
-    if output_ids != input_ids:
-        raise TextifyResponseError("textified artifact order must match input artifact order")
-    input_by_id = {artifact.artifact_id: artifact for artifact in input_artifacts}
-    for model_artifact in model_artifacts:
-        artifact_id = _model_artifact_id(model_artifact)
-        input_artifact = input_by_id[artifact_id]
-        if _require_string(_require_field(model_artifact, "name"), "name") != input_artifact.name:
-            raise TextifyResponseError(f"textified artifact name must match input artifact name for artifact_id {artifact_id}")
-        status = TextifyStatus(_require_string(_require_field(model_artifact, "status"), "status"))
-        suggested_files = [
-            SuggestedTextFile.from_json(item)
-            for item in _require_list(_require_field(model_artifact, "suggested_files"), "suggested_files")
-        ]
-        if status == TextifyStatus.CONVERTED and not suggested_files:
-            raise TextifyResponseError("converted artifacts must include suggested_files")
-        if status != TextifyStatus.CONVERTED and suggested_files:
-            raise TextifyResponseError("non-converted artifacts must not include suggested_files")
-        _require_list(_require_field(model_artifact, "warnings"), "warnings")
-        _optional_non_negative_number(_require_field(model_artifact, "page_count"), "page_count")
-        for suggested_file in suggested_files:
-            _reject_useless_markdown_code_fence(suggested_file, input_artifact)
+    model_source = _model_source_from_json(model_source)
+    if _require_string(_require_field(model_source, "name"), "name") != input_source.name:
+        raise TextifyResponseError("textified source name must match input source name")
+    status = TextifyStatus(_require_string(_require_field(model_source, "status"), "status"))
+    suggested_files = [
+        SuggestedTextFile.from_json(item)
+        for item in _require_list(_require_field(model_source, "suggested_files"), "suggested_files")
+    ]
+    if status == TextifyStatus.CONVERTED and not suggested_files:
+        raise TextifyResponseError("converted sources must include suggested_files")
+    if status != TextifyStatus.CONVERTED and suggested_files:
+        raise TextifyResponseError("non-converted sources must not include suggested_files")
+    _require_list(_require_field(model_source, "warnings"), "warnings")
+    _optional_non_negative_number(_require_field(model_source, "page_count"), "page_count")
+    for suggested_file in suggested_files:
+        _reject_useless_markdown_code_fence(suggested_file, input_source)
 
 
-def _response_artifact_from_model(
-    input_artifact: Artifact,
-    model_artifact: Mapping[str, JsonValue],
-) -> TextifiedArtifact:
-    return TextifiedArtifact(
-        artifact_id=input_artifact.artifact_id,
-        name=input_artifact.name,
-        input_mime_type=effective_mime_type(input_artifact),
-        source_sha256=source_sha256(input_artifact),
+def _response_source_from_model(
+    input_source: TextifySource,
+    model_source: Mapping[str, JsonValue],
+) -> TextifiedSource:
+    return TextifiedSource(
+        name=input_source.name,
+        input_mime_type=effective_mime_type(input_source),
+        source_sha256=source_sha256(input_source),
         textification_required=True,
-        status=TextifyStatus(_require_string(_require_field(model_artifact, "status"), "status")),
+        status=TextifyStatus(_require_string(_require_field(model_source, "status"), "status")),
         suggested_files=[
             SuggestedTextFile.from_json(item)
-            for item in _require_list(_require_field(model_artifact, "suggested_files"), "suggested_files")
+            for item in _require_list(_require_field(model_source, "suggested_files"), "suggested_files")
         ],
         detected_languages=[
             _require_string(language, "language")
-            for language in _require_list(_require_field(model_artifact, "detected_languages"), "detected_languages")
+            for language in _require_list(_require_field(model_source, "detected_languages"), "detected_languages")
         ],
-        page_count=_optional_non_negative_number(_require_field(model_artifact, "page_count"), "page_count"),
+        page_count=_optional_non_negative_number(_require_field(model_source, "page_count"), "page_count"),
         warnings=[
             _require_string(warning, "warning")
-            for warning in _require_list(_require_field(model_artifact, "warnings"), "warnings")
+            for warning in _require_list(_require_field(model_source, "warnings"), "warnings")
         ],
     )
 
 
-def _model_artifact_from_json(value: object) -> Mapping[str, JsonValue]:
-    return _require_mapping(value, "model artifact")
+def _model_source_from_json(value: object) -> Mapping[str, JsonValue]:
+    return _require_mapping(value, "model source")
 
 
-def _model_artifact_id(value: Mapping[str, JsonValue]) -> int:
-    artifact_id = _require_field(value, "artifact_id")
-    if not isinstance(artifact_id, int) or isinstance(artifact_id, bool) or artifact_id < 1:
-        raise TextifyResponseError("artifact_id must be a positive integer")
-    return artifact_id
-
-
-def _reject_useless_markdown_code_fence(suggested_file: SuggestedTextFile, artifact: Artifact) -> None:
+def _reject_useless_markdown_code_fence(suggested_file: SuggestedTextFile, source: TextifySource) -> None:
     if suggested_file.output_format != "markdown":
         return
     text = suggested_file.text.strip()
     if not text.startswith("```") or not text.endswith("```"):
         return
-    if artifact.context.get("artifact_kind") in {"code", "log", "terminal"}:
+    if source.context.get("artifact_kind") in {"code", "log", "terminal"}:
         return
     raise TextifyResponseError("markdown output must not be wrapped in a single code fence")
 
@@ -173,16 +145,3 @@ def _optional_non_negative_number(value: object, field_name: str) -> float | int
         raise TextifyResponseError(f"{field_name} must be a non-negative number")
     return value
 
-
-def _duplicated_ids(ids: Sequence[int]) -> tuple[int, ...]:
-    seen: set[int] = set()
-    duplicates: list[int] = []
-    for identifier in ids:
-        if identifier in seen and identifier not in duplicates:
-            duplicates.append(identifier)
-        seen.add(identifier)
-    return tuple(duplicates)
-
-
-def _format_ids(ids: Sequence[int]) -> str:
-    return ", ".join(str(identifier) for identifier in ids)

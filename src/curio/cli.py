@@ -19,12 +19,13 @@ from curio.llm_caller import (
 from curio.schemas import SchemaValidationError
 from curio.textify import (
     DEFAULT_TEXTIFY_OUTPUT_FORMAT,
-    Artifact,
     PreferredOutputFormat,
     TextifyError,
     TextifyRequest,
     TextifyResponse,
     TextifyService,
+    TextifySource,
+    TextifyStatus,
     is_deterministic_text_media,
     is_provider_supported_media,
 )
@@ -272,15 +273,12 @@ def _raw_textify_request(
     return TextifyRequest(
         request_id=_new_textify_request_id(),
         preferred_output_format=preferred_output_format,
-        artifacts=[
-            Artifact(
-                artifact_id=1,
-                name=artifact_path.name,
-                path=str(artifact_path.resolve()),
-                mime_type=mime_type,
-                source_language_hint=source_language,
-            )
-        ],
+        source=TextifySource(
+            path=str(artifact_path.resolve()),
+            name=artifact_path.name,
+            mime_type=mime_type,
+            source_language_hint=source_language,
+        ),
         llm_caller=llm_caller,
     )
 
@@ -301,7 +299,7 @@ def _apply_structured_textify_request_overrides(
     return TextifyRequest(
         request_id=request.request_id,
         preferred_output_format=selected_preference,
-        artifacts=request.artifacts,
+        source=request.source,
         llm_caller=selected_llm_caller,
     )
 
@@ -310,13 +308,14 @@ def _textify_request_from_cli(
     ctx: typer.Context,
     *,
     artifact_path: Path | None,
+    input_file: Path | None,
     input_json: Path | None,
     mime_type: str | None,
     source_language: str | None,
     preferred_output_format: str,
     llm_caller: str | None,
 ) -> TextifyRequest:
-    if sum((artifact_path is not None, input_json is not None)) != 1:
+    if sum((artifact_path is not None, input_file is not None, input_json is not None)) != 1:
         _fail_usage("exactly one input mode must be provided")
     try:
         if input_json is not None:
@@ -328,8 +327,9 @@ def _textify_request_from_cli(
                 preferred_output_format=preferred_output_format,
                 llm_caller=llm_caller,
             )
+        selected_artifact_path = input_file if input_file is not None else artifact_path
         return _raw_textify_request(
-            cast(Path, artifact_path),
+            cast(Path, selected_artifact_path),
             mime_type=mime_type,
             source_language=source_language,
             preferred_output_format=preferred_output_format,
@@ -360,14 +360,16 @@ def _render_textify_output(
 ) -> str:
     if structured_output:
         return json.dumps(response.to_json(), ensure_ascii=False) + "\n"
-    suggested_files = [
-        suggested_file
-        for artifact in response.artifacts
-        for suggested_file in artifact.suggested_files
-    ]
+    if _is_single_skipped_text_media_response(response):
+        return ""
+    suggested_files = list(response.source.suggested_files)
     if len(suggested_files) == 1:
         return suggested_files[0].text + "\n"
     return json.dumps(response.to_json(), ensure_ascii=False) + "\n"
+
+
+def _is_single_skipped_text_media_response(response: TextifyResponse) -> bool:
+    return response.source.status == TextifyStatus.SKIPPED_TEXT_MEDIA
 
 
 def _emit_warnings(response: TranslationResponse) -> None:
@@ -381,9 +383,8 @@ def _emit_warnings(response: TranslationResponse) -> None:
 def _emit_textify_warnings(response: TextifyResponse) -> None:
     for warning in response.warnings:
         typer.secho(f"[WARNINGS: {warning}]", fg=typer.colors.RED, err=True)
-    for artifact in response.artifacts:
-        for warning in artifact.warnings:
-            typer.secho(f"[WARNINGS: {warning}]", fg=typer.colors.RED, err=True)
+    for warning in response.source.warnings:
+        typer.secho(f"[WARNINGS: {warning}]", fg=typer.colors.RED, err=True)
 
 
 def _stats_value(value: float | int | None) -> str:
@@ -487,10 +488,7 @@ def _resolve_translation_request_llm_caller(
 
 
 def _textify_requires_llm(request: TextifyRequest) -> bool:
-    return any(
-        not is_deterministic_text_media(artifact) and is_provider_supported_media(artifact)
-        for artifact in request.artifacts
-    )
+    return not is_deterministic_text_media(request.source) and is_provider_supported_media(request.source)
 
 
 def _request_textify_llm_caller(request: TextifyRequest) -> str | None:
@@ -503,7 +501,7 @@ def _request_textify_with_llm_caller(request: TextifyRequest, llm_caller: str) -
     return TextifyRequest(
         request_id=request.request_id,
         preferred_output_format=request.preferred_output_format,
-        artifacts=request.artifacts,
+        source=request.source,
         llm_caller=llm_caller,
     )
 
@@ -599,6 +597,10 @@ def translate(
 def textify(
     ctx: typer.Context,
     artifact_path: Annotated[Path | None, typer.Argument(help="Local media artifact to convert to text.")] = None,
+    input_file: Annotated[
+        Path | None,
+        typer.Option("--input-file", help="Read a local media artifact path from an option."),
+    ] = None,
     input_json: Annotated[
         Path | None,
         typer.Option("--input-json", help="Read a structured textify request JSON file."),
@@ -631,7 +633,7 @@ def textify(
         typer.Option("--llm-caller", help="Override the configured or input JSON named LLM caller."),
     ] = None,
 ) -> None:
-    """Convert non-text media artifacts into source-language text."""
+    """Convert one non-text media source into source-language text."""
     try:
         PreferredOutputFormat(preferred_output_format)
     except ValueError:
@@ -639,6 +641,7 @@ def textify(
     request = _textify_request_from_cli(
         ctx,
         artifact_path=artifact_path,
+        input_file=input_file,
         input_json=input_json,
         mime_type=mime_type,
         source_language=source_language,

@@ -15,16 +15,16 @@ from curio.llm_caller import (
 )
 from curio.schemas import SchemaName, SchemaValidationError, validate_json
 from curio.textify import (
-    Artifact,
     PreferredOutputFormat,
     SuggestedTextFile,
-    TextifiedArtifact,
+    TextifiedSource,
     TextifyLlmSummary,
     TextifyRequest,
     TextifyRequestError,
     TextifyResponse,
     TextifyResponseError,
     TextifyService,
+    TextifySource,
     TextifyStatus,
     effective_mime_type,
     file_sha256,
@@ -43,9 +43,8 @@ def write_file(path: Path, data: bytes) -> Path:
     return path
 
 
-def make_artifact(path: Path, *, artifact_id: int = 1, mime_type: str | None = None) -> Artifact:
-    return Artifact(
-        artifact_id=artifact_id,
+def make_source(path: Path, *, mime_type: str | None = None) -> TextifySource:
+    return TextifySource(
         name=path.name,
         path=str(path),
         mime_type=mime_type,
@@ -74,7 +73,7 @@ def make_request(path: Path) -> TextifyRequest:
     return TextifyRequest(
         request_id="textify-test",
         preferred_output_format="auto",
-        artifacts=[make_artifact(path, mime_type="image/png")],
+        source=make_source(path, mime_type="image/png"),
         llm_caller="textifier_codex_gpt_54_mini",
     )
 
@@ -98,26 +97,29 @@ class RecordingLlmClient:
         )
 
 
-def converted_output(request_id: str = "textify-test", artifact_id: int = 1, name: str = "scan.png") -> object:
+def converted_output(
+    request_id: str = "textify-test",
+    name: str = "scan.png",
+    suggested_files: list[object] | None = None,
+) -> object:
     return {
         "request_id": request_id,
-        "artifacts": [
-            {
-                "artifact_id": artifact_id,
-                "name": name,
-                "status": "converted",
-                "suggested_files": [
-                    {
-                        "suggested_path": "notes/scan.md",
-                        "output_format": "markdown",
-                        "text": "# Receipt\n\n合計 1200円",
-                    }
-                ],
-                "detected_languages": ["ja"],
-                "page_count": 1,
-                "warnings": ["low contrast"],
-            }
-        ],
+        "source": {
+            "name": name,
+            "status": "converted",
+            "suggested_files": [
+                {
+                    "suggested_path": "notes/scan.md",
+                    "output_format": "markdown",
+                    "text": "# Receipt\n\n合計 1200円",
+                }
+            ]
+            if suggested_files is None
+            else suggested_files,
+            "detected_languages": ["ja"],
+            "page_count": 1,
+            "warnings": ["low contrast"],
+        },
     }
 
 
@@ -126,10 +128,10 @@ def test_textify_root_exports_public_service_contracts() -> None:
         "DEFAULT_TEXTIFY_OUTPUT_FORMAT",
         "TEXTIFY_REQUEST_VERSION",
         "TEXTIFY_RESPONSE_VERSION",
-        "Artifact",
+        "TextifySource",
         "PreferredOutputFormat",
         "SuggestedTextFile",
-        "TextifiedArtifact",
+        "TextifiedSource",
         "TextifyError",
         "TextifyLlmSummary",
         "TextifyRequest",
@@ -163,26 +165,23 @@ def test_textify_request_and_response_serialize_to_schema_payload(tmp_path: Path
 
     response = TextifyResponse(
         request_id="textify-test",
-        artifacts=[
-            TextifiedArtifact(
-                artifact_id=1,
-                name="scan.png",
-                input_mime_type="image/png",
-                source_sha256=file_sha256(artifact_path),
-                textification_required=True,
-                status="converted",
-                suggested_files=[
-                    SuggestedTextFile(
-                        suggested_path="notes/scan.md",
-                        output_format="markdown",
-                        text="# Receipt",
-                    )
-                ],
-                detected_languages=["ja"],
-                page_count=1,
-                warnings=["low contrast"],
-            )
-        ],
+        source=TextifiedSource(
+            name="scan.png",
+            input_mime_type="image/png",
+            source_sha256=file_sha256(artifact_path),
+            textification_required=True,
+            status="converted",
+            suggested_files=[
+                SuggestedTextFile(
+                    suggested_path="notes/scan.md",
+                    output_format="markdown",
+                    text="# Receipt",
+                )
+            ],
+            detected_languages=["ja"],
+            page_count=1,
+            warnings=["low contrast"],
+        ),
         llm=TextifyLlmSummary(
             provider="codex_cli",
             model="gpt-test",
@@ -208,19 +207,14 @@ def test_textify_from_json_rejects_schema_invalid_payload(tmp_path: Path) -> Non
 
 
 def test_textify_model_invariants_reject_invalid_values(tmp_path: Path) -> None:
-    with pytest.raises(TextifyRequestError, match="artifact path must be absolute"):
-        Artifact(artifact_id=1, name="relative", path="relative.png")
+    with pytest.raises(TextifyRequestError, match="source path must be absolute"):
+        TextifySource(path="relative.png", name="relative")
 
-    artifact_path = write_file(tmp_path / "scan.png", b"png")
-    with pytest.raises(TextifyRequestError, match="artifact_id values must be unique"):
-        TextifyRequest(
-            request_id="textify-test",
-            artifacts=[make_artifact(artifact_path), make_artifact(artifact_path)],
-        )
+    with pytest.raises(TextifyRequestError, match="source name must not be empty"):
+        TextifySource(path="/")
 
-    with pytest.raises(TextifyResponseError, match="converted artifacts"):
-        TextifiedArtifact(
-            artifact_id=1,
+    with pytest.raises(TextifyResponseError, match="converted sources"):
+        TextifiedSource(
             name="scan.png",
             input_mime_type="image/png",
             source_sha256="abc",
@@ -228,9 +222,8 @@ def test_textify_model_invariants_reject_invalid_values(tmp_path: Path) -> None:
             status="converted",
         )
 
-    with pytest.raises(TextifyResponseError, match="non-converted artifacts"):
-        TextifiedArtifact(
-            artifact_id=1,
+    with pytest.raises(TextifyResponseError, match="non-converted sources"):
+        TextifiedSource(
             name="scan.png",
             input_mime_type="image/png",
             source_sha256="abc",
@@ -265,13 +258,13 @@ def test_media_helpers_classify_text_binary_and_supported_media(tmp_path: Path) 
     image_path = write_file(tmp_path / "photo.webp", b"fake")
     pdf_path = write_file(tmp_path / "paper.pdf", b"%PDF")
 
-    text_artifact = make_artifact(text_path, mime_type=None)
-    image_artifact = make_artifact(image_path, mime_type="IMAGE/WEBP; charset=binary")
+    text_source = make_source(text_path, mime_type=None)
+    image_source = make_source(image_path, mime_type="IMAGE/WEBP; charset=binary")
 
     assert normalize_mime_type(" IMAGE/PNG ; charset=binary ") == "image/png"
     assert normalize_mime_type(" ") is None
-    assert effective_mime_type(text_artifact) == "text/plain"
-    assert file_sha256(text_path) == source_sha256(text_artifact)
+    assert effective_mime_type(text_source) == "text/plain"
+    assert file_sha256(text_path) == source_sha256(text_source)
     assert is_probably_plaintext(text_path) is True
     assert is_probably_plaintext(log_path) is True
     assert is_probably_plaintext(empty_path) is True
@@ -279,38 +272,54 @@ def test_media_helpers_classify_text_binary_and_supported_media(tmp_path: Path) 
     assert is_probably_plaintext(invalid_utf8_path) is False
     assert is_probably_plaintext(binary_path) is False
     assert is_probably_plaintext(tmp_path / "missing.txt") is False
-    assert is_deterministic_text_media(text_artifact) is True
-    assert is_provider_supported_media(image_artifact) is True
-    assert is_provider_supported_media(make_artifact(pdf_path, mime_type=None)) is True
-    assert preferred_output_hint(text_artifact, PreferredOutputFormat.AUTO) == "txt"
-    assert preferred_output_hint(image_artifact, "markdown") == "markdown"
-    assert is_deterministic_text_media(make_artifact(log_path, mime_type=None)) is True
-    assert is_deterministic_text_media(make_artifact(text_path, mime_type="application/octet-stream")) is True
+    assert is_deterministic_text_media(text_source) is True
+    assert is_provider_supported_media(image_source) is True
+    assert is_provider_supported_media(make_source(pdf_path, mime_type=None)) is True
+    assert preferred_output_hint(text_source, PreferredOutputFormat.AUTO) == "txt"
+    assert preferred_output_hint(image_source, "markdown") == "markdown"
+    assert is_deterministic_text_media(make_source(log_path, mime_type=None)) is True
+    assert is_deterministic_text_media(make_source(text_path, mime_type="application/octet-stream")) is True
 
 
-def test_textify_service_skips_text_and_marks_unsupported_without_llm(tmp_path: Path) -> None:
-    text_artifact = make_artifact(write_file(tmp_path / "note.txt", b"hello"), mime_type="text/plain")
-    evidence_artifact = Artifact(
-        artifact_id=2,
+def test_textify_service_skips_text_without_llm(tmp_path: Path) -> None:
+    text_source = make_source(write_file(tmp_path / "note.txt", b"hello"), mime_type="text/plain")
+    request = TextifyRequest(request_id="textify-test", source=text_source)
+
+    response = TextifyService().textify(request)
+
+    assert response.llm is None
+    assert response.source.status == TextifyStatus.SKIPPED_TEXT_MEDIA
+    assert response.source.textification_required is False
+    validate_json(response.to_json(), SchemaName.TEXTIFY_RESPONSE)
+
+
+def test_textify_service_skips_existing_evidence_text_without_llm(tmp_path: Path) -> None:
+    evidence_source = TextifySource(
         name="evidence.png",
         path=str(write_file(tmp_path / "evidence.png", b"png")),
         mime_type="image/png",
         sha256="abc",
         context={"evidence_text": "already extracted"},
     )
-    unsupported = make_artifact(write_file(tmp_path / "archive.zip", b"zip"), artifact_id=3, mime_type="application/zip")
-    request = TextifyRequest(request_id="textify-test", artifacts=[text_artifact, evidence_artifact, unsupported])
+    request = TextifyRequest(request_id="textify-test", source=evidence_source)
 
     response = TextifyService().textify(request)
 
     assert response.llm is None
-    assert [artifact.status for artifact in response.artifacts] == [
-        TextifyStatus.SKIPPED_TEXT_MEDIA,
-        TextifyStatus.SKIPPED_TEXT_MEDIA,
-        TextifyStatus.UNSUPPORTED_MEDIA,
-    ]
-    assert response.artifacts[0].textification_required is False
-    assert response.artifacts[2].textification_required is True
+    assert response.source.status == TextifyStatus.SKIPPED_TEXT_MEDIA
+    assert response.source.textification_required is False
+    validate_json(response.to_json(), SchemaName.TEXTIFY_RESPONSE)
+
+
+def test_textify_service_marks_unsupported_without_llm(tmp_path: Path) -> None:
+    unsupported = make_source(write_file(tmp_path / "archive.zip", b"zip"), mime_type="application/zip")
+    request = TextifyRequest(request_id="textify-test", source=unsupported)
+
+    response = TextifyService().textify(request)
+
+    assert response.llm is None
+    assert response.source.status == TextifyStatus.UNSUPPORTED_MEDIA
+    assert response.source.textification_required is True
     validate_json(response.to_json(), SchemaName.TEXTIFY_RESPONSE)
 
 
@@ -326,7 +335,7 @@ def test_textify_service_converts_with_fake_client_and_cost(tmp_path: Path) -> N
 
     assert len(client.requests) == 1
     assert client.requests[0].workflow == "textify"
-    assert response.artifacts[0].suggested_files[0].text == "# Receipt\n\n合計 1200円"
+    assert response.source.suggested_files[0].text == "# Receipt\n\n合計 1200円"
     assert response.llm is not None
     assert response.llm.cost_estimate == LlmCostEstimate("USD", "api_equivalent", 0.00016575, 0.75, 0.075, 4.5)
     assert response.warnings == ("provider warning",)
@@ -339,51 +348,37 @@ def test_textify_service_requires_client_for_supported_non_text(tmp_path: Path) 
         TextifyService().textify(request)
 
 
-def test_textify_service_aggregates_multiple_provider_calls(tmp_path: Path) -> None:
-    first = make_artifact(write_file(tmp_path / "first.png", b"first"), artifact_id=1, mime_type="image/png")
-    second = make_artifact(write_file(tmp_path / "second.png", b"second"), artifact_id=2, mime_type="image/png")
-    outputs = [
-        converted_output(artifact_id=1, name="first.png"),
-        converted_output(artifact_id=2, name="second.png"),
-    ]
-
-    class MultiClient:
-        def __init__(self) -> None:
-            self.requests: list[LlmRequest] = []
-
-        def complete(self, request: LlmRequest) -> LlmResponse:
-            self.requests.append(request)
-            return LlmResponse(
-                request_id=request.request_id,
-                status="succeeded",
-                provider="codex_cli",
-                model="gpt-test",
-                output=LlmOutput(value=outputs[len(self.requests) - 1]),
-                usage=make_usage(),
-            )
-
-    response = TextifyService(llm_client=MultiClient()).textify(
-        TextifyRequest(request_id="textify-test", artifacts=[first, second])
+def test_textify_service_allows_multiple_suggested_files_from_one_source(tmp_path: Path) -> None:
+    source_path = write_file(tmp_path / "scripts.png", b"png")
+    request = make_request(source_path)
+    client = RecordingLlmClient(
+        converted_output(
+            name="scripts.png",
+            suggested_files=[
+                {"suggested_path": "scripts/setup.sh", "output_format": "txt", "text": "echo setup"},
+                {"suggested_path": "scripts/run.sh", "output_format": "txt", "text": "echo run"},
+            ],
+        )
     )
 
-    assert response.llm is not None
-    assert response.llm.usage.input_tokens == 200
-    assert response.llm.usage.metered_objects == (MeteredObject("document_ai_pages", 4, "page"),)
+    response = TextifyService(llm_client=client).textify(request)
+
+    assert len(client.requests) == 1
+    assert [suggested.suggested_path for suggested in response.source.suggested_files] == [
+        "scripts/setup.sh",
+        "scripts/run.sh",
+    ]
 
 
 def test_textify_nested_parsers_reject_invalid_shapes() -> None:
     with pytest.raises(ValueError, match="request_id must not be empty"):
-        TextifyRequest(request_id="", artifacts=[Artifact(1, "x", "/tmp/x.txt")])
+        TextifyRequest(request_id="", source=TextifySource(path="/tmp/x.txt", name="x"))
 
-    with pytest.raises(ValueError, match="artifact_id must be a positive integer"):
-        Artifact(artifact_id=0, name="x", path="/tmp/x.txt")
-
-    with pytest.raises(TextifyRequestError, match="artifacts must not be empty"):
-        TextifyRequest(request_id="textify-test", artifacts=[])
+    with pytest.raises(TextifyRequestError, match="source must be"):
+        TextifyRequest(request_id="textify-test", source=cast(TextifySource, "bad source"))
 
     with pytest.raises(ValueError, match="textification_required must be a boolean"):
-        TextifiedArtifact(
-            artifact_id=1,
+        TextifiedSource(
             name="scan.png",
             input_mime_type=None,
             source_sha256=None,
@@ -392,8 +387,7 @@ def test_textify_nested_parsers_reject_invalid_shapes() -> None:
         )
 
     with pytest.raises(ValueError, match="page_count must be a non-negative number"):
-        TextifiedArtifact(
-            artifact_id=1,
+        TextifiedSource(
             name="scan.png",
             input_mime_type=None,
             source_sha256=None,
@@ -402,13 +396,12 @@ def test_textify_nested_parsers_reject_invalid_shapes() -> None:
             page_count=-1,
         )
 
-    with pytest.raises(ValueError, match="artifact must be an object"):
-        Artifact.from_json([])
+    with pytest.raises(ValueError, match="source must be an object"):
+        TextifySource.from_json([])
 
     with pytest.raises(ValueError, match="suggested_files must be a list"):
-        TextifiedArtifact.from_json(
+        TextifiedSource.from_json(
             {
-                "artifact_id": 1,
                 "name": "scan.png",
                 "input_mime_type": None,
                 "source_sha256": None,
@@ -424,24 +417,20 @@ def test_textify_nested_parsers_reject_invalid_shapes() -> None:
     with pytest.raises(ValueError, match="warnings must be unique"):
         TextifyResponse(
             request_id="textify-test",
-            artifacts=[
-                TextifiedArtifact(
-                    artifact_id=1,
-                    name="scan.png",
-                    input_mime_type=None,
-                    source_sha256=None,
-                    textification_required=False,
-                    status="skipped_text_media",
-                )
-            ],
+            source=TextifiedSource(
+                name="scan.png",
+                input_mime_type=None,
+                source_sha256=None,
+                textification_required=False,
+                status="skipped_text_media",
+            ),
             warnings=["same", "same"],
         )
 
-    with pytest.raises(ValueError, match="artifact_id is required"):
-        Artifact.from_json(
+    with pytest.raises(ValueError, match="path is required"):
+        TextifySource.from_json(
             {
                 "name": "scan",
-                "path": "/tmp/scan.png",
                 "mime_type": None,
                 "sha256": None,
                 "source_language_hint": None,
@@ -453,8 +442,7 @@ def test_textify_nested_parsers_reject_invalid_shapes() -> None:
         SuggestedTextFile.from_json({"output_format": "markdown", "text": "hello"})
 
     with pytest.raises(ValueError, match="language values must be unique"):
-        TextifiedArtifact(
-            artifact_id=1,
+        TextifiedSource(
             name="scan.png",
             input_mime_type=None,
             source_sha256=None,
@@ -464,17 +452,8 @@ def test_textify_nested_parsers_reject_invalid_shapes() -> None:
             detected_languages=["en", "en"],
         )
 
-    with pytest.raises(TextifyResponseError, match="artifacts must not be empty"):
-        TextifyResponse(request_id="textify-test", artifacts=[])
-
-    with pytest.raises(TextifyResponseError, match="artifact_id values must be unique"):
-        TextifyResponse(
-            request_id="textify-test",
-            artifacts=[
-                TextifiedArtifact(1, "a", None, None, False, "skipped_text_media"),
-                TextifiedArtifact(1, "b", None, None, False, "skipped_text_media"),
-            ],
-        )
+    with pytest.raises(TextifyResponseError, match="source must be"):
+        TextifyResponse(request_id="textify-test", source=cast(TextifiedSource, "bad source"))
 
     with pytest.raises(ValueError, match="provider"):
         TextifyLlmSummary.from_json({"provider": 1, "model": None, "usage": make_usage().to_json(), "cost_estimate": None})
@@ -484,16 +463,13 @@ def test_textify_nested_parsers_reject_invalid_shapes() -> None:
             {
                 "textify_response_version": "curio-textify-response.v1",
                 "request_id": "textify-test",
-                "artifacts": [
-                    TextifiedArtifact(
-                        artifact_id=1,
-                        name="scan.png",
-                        input_mime_type=None,
-                        source_sha256=None,
-                        textification_required=False,
-                        status="skipped_text_media",
-                    ).to_json()
-                ],
+                "source": TextifiedSource(
+                    name="scan.png",
+                    input_mime_type=None,
+                    source_sha256=None,
+                    textification_required=False,
+                    status="skipped_text_media",
+                ).to_json(),
                 "llm": None,
                 "warnings": [cast(str, 1)],
             }

@@ -143,8 +143,7 @@ def build_google_document_ai_output_value(
 ) -> JsonObject:
     text = _document_text(payload).strip()
     page_count = _page_count(payload)
-    artifact_id = _metadata_positive_int(request.metadata.get("artifact_id"), "artifact_id")
-    artifact_name = _metadata_string(request.metadata.get("artifact_name"), "artifact_name")
+    source_name = _metadata_string(request.metadata.get("source_name"), "source_name")
     if not text:
         status = "no_text_found"
         suggested_files: list[JsonObject] = []
@@ -161,17 +160,14 @@ def build_google_document_ai_output_value(
         ]
     return {
         "request_id": request.request_id,
-        "artifacts": [
-            {
-                "artifact_id": artifact_id,
-                "name": artifact_name,
-                "status": status,
-                "suggested_files": suggested_files,
-                "detected_languages": _detected_languages(payload),
-                "page_count": page_count,
-                "warnings": _payload_warnings(payload),
-            }
-        ],
+        "source": {
+            "name": source_name,
+            "status": status,
+            "suggested_files": suggested_files,
+            "detected_languages": _detected_languages(payload),
+            "page_count": page_count,
+            "warnings": _payload_warnings(payload),
+        },
     }
 
 
@@ -236,12 +232,6 @@ def _suggested_path(request: LlmRequest, file_part: LocalFileContentPart) -> str
 def _metadata_string(value: object, field_name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise LlmRejectedRequestError(f"google_document_ai request metadata must include {field_name}")
-    return value
-
-
-def _metadata_positive_int(value: object, field_name: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
-        raise LlmRejectedRequestError(f"google_document_ai request metadata must include positive {field_name}")
     return value
 
 

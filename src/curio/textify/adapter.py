@@ -16,7 +16,7 @@ from curio.textify.media import (
     preferred_output_hint,
     source_sha256,
 )
-from curio.textify.models import Artifact, JsonObject, TextifyRequest
+from curio.textify.models import JsonObject, TextifyRequest, TextifySource
 
 TEXTIFY_WORKFLOW = "textify"
 TEXTIFY_MODEL_OUTPUT_SCHEMA_NAME = "curio_textify_model_output"
@@ -29,7 +29,7 @@ DEFAULT_TEXTIFY_INSTRUCTIONS = (
 )
 DEFAULT_TEXTIFY_USER_PROMPT_TEMPLATE = "\n".join(
     [
-        "Use the media artifact listed below to extract visible/readable source-language text.",
+        "Use the media source listed below to extract visible/readable source-language text.",
         "",
         "Rules:",
         "- Do not translate.",
@@ -45,8 +45,8 @@ DEFAULT_TEXTIFY_USER_PROMPT_TEMPLATE = "\n".join(
         "Preferred output format: {preferred_output_format}",
         "Suggested file policy: {suggested_file_policy}",
         "",
-        "Artifact manifest JSON:",
-        "{artifact_manifest_json}",
+        "Source manifest JSON:",
+        "{source_manifest_json}",
         "",
         "Textify request JSON:",
         "{textify_request_json}",
@@ -61,14 +61,10 @@ def textify_model_output_schema() -> JsonObject:
     return {
         "type": "object",
         "additionalProperties": False,
-        "required": ["request_id", "artifacts"],
+        "required": ["request_id", "source"],
         "properties": {
             "request_id": {"type": "string", "minLength": 1},
-            "artifacts": {
-                "type": "array",
-                "minItems": 1,
-                "items": {"$ref": "#/$defs/modelArtifact"},
-            },
+            "source": {"$ref": "#/$defs/modelSource"},
         },
         "$defs": {
             "warnings": {
@@ -86,11 +82,10 @@ def textify_model_output_schema() -> JsonObject:
                     "text": {"type": "string", "minLength": 1},
                 },
             },
-            "modelArtifact": {
+            "modelSource": {
                 "type": "object",
                 "additionalProperties": False,
                 "required": [
-                    "artifact_id",
                     "name",
                     "status",
                     "suggested_files",
@@ -99,7 +94,6 @@ def textify_model_output_schema() -> JsonObject:
                     "warnings",
                 ],
                 "properties": {
-                    "artifact_id": {"type": "integer", "minimum": 1},
                     "name": {"type": "string", "minLength": 1},
                     "status": {
                         "type": "string",
@@ -127,31 +121,24 @@ def textify_model_output_schema() -> JsonObject:
     }
 
 
-def artifact_manifest(artifact: Artifact, preferred_format: str) -> JsonObject:
+def source_manifest(source: TextifySource, preferred_format: str) -> JsonObject:
     return {
-        "artifact_id": artifact.artifact_id,
-        "name": artifact.name,
-        "path": artifact.path,
-        "mime_type": effective_mime_type(artifact),
-        "sha256": source_sha256(artifact),
-        "source_language_hint": artifact.source_language_hint,
+        "name": source.name,
+        "path": source.path,
+        "mime_type": effective_mime_type(source),
+        "sha256": source_sha256(source),
+        "source_language_hint": source.source_language_hint,
         "preferred_output_format": preferred_format,
-        "context": dict(artifact.context),
+        "context": dict(source.context),
     }
 
 
-def build_textify_template_values(request: TextifyRequest, artifact: Artifact) -> Mapping[str, object]:
-    preferred_format = preferred_output_hint(artifact, request.preferred_output_format)
-    manifest = artifact_manifest(artifact, preferred_format)
-    single_artifact_request = TextifyRequest(
-        request_id=request.request_id,
-        artifacts=[artifact],
-        preferred_output_format=request.preferred_output_format,
-        llm_caller=request.llm_caller,
-    )
+def build_textify_template_values(request: TextifyRequest, source: TextifySource) -> Mapping[str, object]:
+    preferred_format = preferred_output_hint(source, request.preferred_output_format)
+    manifest = source_manifest(source, preferred_format)
     return {
         "textify_request_json": json.dumps(
-            single_artifact_request.to_json(),
+            request.to_json(),
             ensure_ascii=False,
             indent=2,
             sort_keys=True,
@@ -159,51 +146,51 @@ def build_textify_template_values(request: TextifyRequest, artifact: Artifact) -
         "output_schema_json": json.dumps(textify_model_output_schema(), ensure_ascii=False, indent=2, sort_keys=True),
         "request_id": request.request_id,
         "preferred_output_format": preferred_format,
-        "artifact_manifest_json": json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True),
+        "source_manifest_json": json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True),
         "suggested_file_policy": SUGGESTED_FILE_POLICY,
     }
 
 
 def build_textify_instructions(
     request: TextifyRequest,
-    artifact: Artifact,
+    source: TextifySource,
     prompt_config: LlmCallerPromptConfig | None = None,
 ) -> str:
     template = DEFAULT_TEXTIFY_INSTRUCTIONS if prompt_config is None or prompt_config.instructions is None else prompt_config.instructions
-    return template.format(**build_textify_template_values(request, artifact))
+    return template.format(**build_textify_template_values(request, source))
 
 
 def build_textify_prompt(
     request: TextifyRequest,
-    artifact: Artifact,
+    source: TextifySource,
     prompt_config: LlmCallerPromptConfig | None = None,
 ) -> str:
     template = DEFAULT_TEXTIFY_USER_PROMPT_TEMPLATE if prompt_config is None or prompt_config.user is None else prompt_config.user
-    return template.format(**build_textify_template_values(request, artifact))
+    return template.format(**build_textify_template_values(request, source))
 
 
 def build_textify_llm_request(
     request: TextifyRequest,
-    artifact: Artifact,
+    source: TextifySource,
     prompt_config: LlmCallerPromptConfig | None = None,
 ) -> LlmRequest:
-    mime_type = effective_mime_type(artifact) or "application/octet-stream"
-    sha256 = source_sha256(artifact)
-    preferred_format = preferred_output_hint(artifact, request.preferred_output_format)
+    mime_type = effective_mime_type(source) or "application/octet-stream"
+    sha256 = source_sha256(source)
+    preferred_format = preferred_output_hint(source, request.preferred_output_format)
     return LlmRequest(
         request_id=request.request_id,
         workflow=TEXTIFY_WORKFLOW,
-        instructions=build_textify_instructions(request, artifact, prompt_config),
+        instructions=build_textify_instructions(request, source, prompt_config),
         input=[
             LlmMessage(
                 role=LlmMessageRole.USER,
                 content=[
-                    TextContentPart(text=build_textify_prompt(request, artifact, prompt_config)),
+                    TextContentPart(text=build_textify_prompt(request, source, prompt_config)),
                     LocalFileContentPart(
-                        path=artifact.path,
+                        path=source.path,
                         mime_type=mime_type,
                         sha256=sha256,
-                        name=artifact.name,
+                        name=source.name,
                     ),
                 ],
             )
@@ -217,10 +204,9 @@ def build_textify_llm_request(
         metadata={
             "source": "curio.textify",
             "llm_caller": request.llm_caller,
-            "artifact_id": artifact.artifact_id,
-            "artifact_name": artifact.name,
+            "source_name": source.name,
             "preferred_output_format": preferred_format,
-            "suggested_path": _default_suggested_path(artifact, preferred_format),
+            "suggested_path": _default_suggested_path(source, preferred_format),
         },
     )
 
@@ -240,7 +226,7 @@ def _required_capabilities(mime_type: str) -> tuple[LlmCapability, ...]:
     return tuple(capabilities)
 
 
-def _default_suggested_path(artifact: Artifact, preferred_format: str) -> str:
-    stem = artifact.name.rsplit(".", 1)[0] or "artifact"
+def _default_suggested_path(source: TextifySource, preferred_format: str) -> str:
+    stem = source.name.rsplit(".", 1)[0] or "source"
     extension = "txt" if preferred_format == "txt" else "md"
     return f"{stem}.{extension}"

@@ -19,8 +19,8 @@ The public module boundary mirrors `curio.translate`:
 - `TextifyService`
 - `TextifyRequest`
 - `TextifyResponse`
-- `Artifact`
-- `TextifiedArtifact`
+- `TextifySource`
+- `TextifiedSource`
 - `SuggestedTextFile`
 - `TextifyError`, `TextifyRequestError`, `TextifyResponseError`
 - `TEXTIFY_REQUEST_VERSION`, `TEXTIFY_RESPONSE_VERSION`
@@ -34,6 +34,7 @@ response assembly. Provider-specific file handling stays in `curio.llm_caller`.
 
 - skip media that deterministic Curio extraction already handles as text
 - convert supported non-text media into source-language text
+- accept exactly one source per request
 - not translate, summarize, evaluate, label, or rank content
 - preserve reading order and meaningful line breaks
 - prefer Markdown for layout-rich artifacts
@@ -58,7 +59,7 @@ Response statuses:
 - `unsupported_media`
 - `no_text_found`
 
-`llm` is nullable because all-text requests are valid no-ops.
+`llm` is nullable because an already-text source is a valid no-op.
 When present, `llm.cost_estimate` mirrors the translate response. Token callers
 use API-equivalent token pricing when configured. Document AI callers report
 page usage through `usage.metered_objects` and can estimate page-priced cost
@@ -66,7 +67,9 @@ when page pricing is configured.
 
 ## Filename Policy
 
-Each converted artifact returns `suggested_files`.
+Each converted source returns `suggested_files`. A single source may yield
+multiple suggested files when the source visibly contains multiple implied
+files, but a textify request never mixes multiple source artifacts.
 
 Rules:
 
@@ -111,5 +114,5 @@ only inside the provider transport.
 - image media can produce Markdown text with a safe suggested path
 - a code screenshot can produce a natural extension such as `.py` or `.sh`
 - provider output is validated before response assembly
-- `curio textify --json PATH` emits `curio-textify-response.v1`
+- `curio textify PATH --json` and `curio textify --input-file PATH --json` emit `curio-textify-response.v1`
 - live smoke tests remain opt-in and skipped from default `make check`

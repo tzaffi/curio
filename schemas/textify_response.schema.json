@@ -7,7 +7,7 @@
   "required": [
     "textify_response_version",
     "request_id",
-    "artifacts",
+    "source",
     "llm",
     "warnings"
   ],
@@ -19,12 +19,8 @@
       "type": "string",
       "minLength": 1
     },
-    "artifacts": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "$ref": "#/$defs/textifiedArtifact"
-      }
+    "source": {
+      "$ref": "#/$defs/textifiedSource"
     },
     "llm": {
       "oneOf": [
@@ -258,11 +254,10 @@
         }
       }
     },
-    "textifiedArtifact": {
+    "textifiedSource": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "artifact_id",
         "name",
         "input_mime_type",
         "source_sha256",
@@ -274,10 +269,6 @@
         "warnings"
       ],
       "properties": {
-        "artifact_id": {
-          "type": "integer",
-          "minimum": 1
-        },
         "name": {
           "type": "string",
           "minLength": 1

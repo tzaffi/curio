@@ -18,9 +18,9 @@ from curio.llm_caller.openai_api import OpenAiResponsesConfig
 JsonObject = dict[str, Any]
 LLM_CALLER_PROMPT_TEMPLATE_FIELDS = frozenset(
     (
-        "artifact_manifest_json",
         "preferred_output_format",
         "request_id",
+        "source_manifest_json",
         "suggested_file_policy",
         "textify_request_json",
         "output_schema_json",

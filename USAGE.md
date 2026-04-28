@@ -214,7 +214,7 @@ customize it per named caller when a model needs different wording:
 Supported placeholders are `{translation_request_json}`, `{output_schema_json}`,
 `{request_id}`, `{target_language}`, and `{english_confidence_threshold}`.
 Textifier prompt templates may also use `{textify_request_json}`,
-`{artifact_manifest_json}`, `{preferred_output_format}`, and
+`{source_manifest_json}`, `{preferred_output_format}`, and
 `{suggested_file_policy}`.
 Literal braces use normal Python escaping: `{{` and `}}`.
 

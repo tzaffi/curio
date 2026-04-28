@@ -54,12 +54,6 @@ def _require_bool(value: object, field_name: str) -> bool:
     return value
 
 
-def _require_positive_int(value: object, field_name: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
-        raise ValueError(f"{field_name} must be a positive integer")
-    return value
-
-
 def _require_optional_non_negative_number(value: object, field_name: str) -> float | int | None:
     if value is None:
         return None
@@ -84,6 +78,10 @@ def _require_field(payload: Mapping[str, JsonValue], field_name: str) -> JsonVal
     if field_name not in payload:
         raise ValueError(f"{field_name} is required")
     return payload[field_name]
+
+
+def _optional_field(payload: Mapping[str, JsonValue], field_name: str, default: JsonValue = None) -> JsonValue:
+    return payload[field_name] if field_name in payload else default
 
 
 def _coerce_warnings(values: Sequence[str]) -> tuple[str, ...]:
@@ -118,23 +116,23 @@ def validate_suggested_path(value: str) -> str:
         raise TextifyResponseError("suggested_path must not contain a drive root")
     return normalized.as_posix()
 
-
 @dataclass(frozen=True, slots=True)
-class Artifact:
-    artifact_id: int
-    name: str
+class TextifySource:
     path: str
+    name: str = ""
     mime_type: str | None = None
     sha256: str | None = None
     source_language_hint: str | None = None
     context: Mapping[str, JsonValue] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        _require_positive_int(self.artifact_id, "artifact_id")
-        _require_string(self.name, "name")
         _require_string(self.path, "path")
         if not Path(self.path).is_absolute():
-            raise TextifyRequestError("artifact path must be absolute")
+            raise TextifyRequestError("source path must be absolute")
+        name = Path(self.path).name if not self.name else _require_string(self.name, "name")
+        if not name:
+            raise TextifyRequestError("source name must not be empty")
+        object.__setattr__(self, "name", name)
         if self.mime_type is not None:
             _require_string(self.mime_type, "mime_type")
         if self.sha256 is not None:
@@ -144,26 +142,25 @@ class Artifact:
         object.__setattr__(self, "context", dict(_require_mapping(self.context, "context")))
 
     @classmethod
-    def from_json(cls, value: object) -> "Artifact":
-        payload = _require_mapping(value, "artifact")
-        mime_type = _require_field(payload, "mime_type")
-        sha256 = _require_field(payload, "sha256")
-        source_language_hint = _require_field(payload, "source_language_hint")
+    def from_json(cls, value: object) -> "TextifySource":
+        payload = _require_mapping(value, "source")
+        mime_type = _optional_field(payload, "mime_type")
+        sha256 = _optional_field(payload, "sha256")
+        source_language_hint = _optional_field(payload, "source_language_hint")
+        name = _optional_field(payload, "name")
         return cls(
-            artifact_id=_require_positive_int(_require_field(payload, "artifact_id"), "artifact_id"),
-            name=_require_string(_require_field(payload, "name"), "name"),
             path=_require_string(_require_field(payload, "path"), "path"),
+            name="" if name is None else _require_string(name, "name"),
             mime_type=None if mime_type is None else _require_string(mime_type, "mime_type"),
             sha256=None if sha256 is None else _require_string(sha256, "sha256"),
             source_language_hint=None
             if source_language_hint is None
             else _require_string(source_language_hint, "source_language_hint"),
-            context=_require_mapping(_require_field(payload, "context"), "context"),
+            context=_require_mapping(_optional_field(payload, "context", {}), "context"),
         )
 
     def to_json(self) -> JsonObject:
         return {
-            "artifact_id": self.artifact_id,
             "name": self.name,
             "path": self.path,
             "mime_type": self.mime_type,
@@ -176,7 +173,7 @@ class Artifact:
 @dataclass(frozen=True, slots=True)
 class TextifyRequest:
     request_id: str
-    artifacts: Sequence[Artifact]
+    source: TextifySource
     preferred_output_format: PreferredOutputFormat | str = PreferredOutputFormat.AUTO
     llm_caller: str | None = None
     textify_request_version: str = field(default=TEXTIFY_REQUEST_VERSION, init=False)
@@ -184,15 +181,10 @@ class TextifyRequest:
     def __post_init__(self) -> None:
         _require_string(self.request_id, "request_id")
         object.__setattr__(self, "preferred_output_format", PreferredOutputFormat(self.preferred_output_format))
-        artifacts = tuple(self.artifacts)
-        if not artifacts:
-            raise TextifyRequestError("artifacts must not be empty")
-        artifact_ids = tuple(artifact.artifact_id for artifact in artifacts)
-        if len(artifact_ids) != len(set(artifact_ids)):
-            raise TextifyRequestError("artifact_id values must be unique")
+        if not isinstance(self.source, TextifySource):
+            raise TextifyRequestError("source must be a TextifySource")
         if self.llm_caller is not None:
             _require_string(self.llm_caller, "llm_caller")
-        object.__setattr__(self, "artifacts", artifacts)
 
     @classmethod
     def from_json(cls, value: object) -> "TextifyRequest":
@@ -205,10 +197,7 @@ class TextifyRequest:
                 _require_field(payload, "preferred_output_format"),
                 "preferred_output_format",
             ),
-            artifacts=[
-                Artifact.from_json(artifact)
-                for artifact in _require_list(_require_field(payload, "artifacts"), "artifacts")
-            ],
+            source=TextifySource.from_json(_require_field(payload, "source")),
             llm_caller=None if llm_caller is None else _require_string(llm_caller, "llm_caller"),
         )
 
@@ -218,7 +207,7 @@ class TextifyRequest:
             "textify_request_version": self.textify_request_version,
             "request_id": self.request_id,
             "preferred_output_format": preferred_output_format.value,
-            "artifacts": [artifact.to_json() for artifact in self.artifacts],
+            "source": self.source.to_json(),
             "llm_caller": self.llm_caller,
         }
 
@@ -254,8 +243,7 @@ class SuggestedTextFile:
 
 
 @dataclass(frozen=True, slots=True)
-class TextifiedArtifact:
-    artifact_id: int
+class TextifiedSource:
     name: str
     input_mime_type: str | None
     source_sha256: str | None
@@ -267,7 +255,6 @@ class TextifiedArtifact:
     warnings: Sequence[str] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
-        _require_positive_int(self.artifact_id, "artifact_id")
         _require_string(self.name, "name")
         if self.input_mime_type is not None:
             _require_string(self.input_mime_type, "input_mime_type")
@@ -278,21 +265,20 @@ class TextifiedArtifact:
         suggested_files = tuple(self.suggested_files)
         status = cast(TextifyStatus, self.status)
         if status == TextifyStatus.CONVERTED and not suggested_files:
-            raise TextifyResponseError("converted artifacts must include suggested_files")
+            raise TextifyResponseError("converted sources must include suggested_files")
         if status != TextifyStatus.CONVERTED and suggested_files:
-            raise TextifyResponseError("non-converted artifacts must not include suggested_files")
+            raise TextifyResponseError("non-converted sources must not include suggested_files")
         object.__setattr__(self, "suggested_files", suggested_files)
         object.__setattr__(self, "detected_languages", _coerce_string_sequence(self.detected_languages, "language"))
         _require_optional_non_negative_number(self.page_count, "page_count")
         object.__setattr__(self, "warnings", _coerce_warnings(self.warnings))
 
     @classmethod
-    def from_json(cls, value: object) -> "TextifiedArtifact":
-        payload = _require_mapping(value, "textified artifact")
+    def from_json(cls, value: object) -> "TextifiedSource":
+        payload = _require_mapping(value, "textified source")
         input_mime_type = _require_field(payload, "input_mime_type")
         source_sha256 = _require_field(payload, "source_sha256")
         return cls(
-            artifact_id=_require_positive_int(_require_field(payload, "artifact_id"), "artifact_id"),
             name=_require_string(_require_field(payload, "name"), "name"),
             input_mime_type=None
             if input_mime_type is None
@@ -321,7 +307,6 @@ class TextifiedArtifact:
     def to_json(self) -> JsonObject:
         status = cast(TextifyStatus, self.status)
         return {
-            "artifact_id": self.artifact_id,
             "name": self.name,
             "input_mime_type": self.input_mime_type,
             "source_sha256": self.source_sha256,
@@ -370,20 +355,15 @@ class TextifyLlmSummary:
 @dataclass(frozen=True, slots=True)
 class TextifyResponse:
     request_id: str
-    artifacts: Sequence[TextifiedArtifact]
+    source: TextifiedSource
     llm: TextifyLlmSummary | None = None
     warnings: Sequence[str] = field(default_factory=tuple)
     textify_response_version: str = field(default=TEXTIFY_RESPONSE_VERSION, init=False)
 
     def __post_init__(self) -> None:
         _require_string(self.request_id, "request_id")
-        artifacts = tuple(self.artifacts)
-        if not artifacts:
-            raise TextifyResponseError("artifacts must not be empty")
-        artifact_ids = tuple(artifact.artifact_id for artifact in artifacts)
-        if len(artifact_ids) != len(set(artifact_ids)):
-            raise TextifyResponseError("artifact_id values must be unique")
-        object.__setattr__(self, "artifacts", artifacts)
+        if not isinstance(self.source, TextifiedSource):
+            raise TextifyResponseError("source must be a TextifiedSource")
         object.__setattr__(self, "warnings", _coerce_warnings(self.warnings))
 
     @classmethod
@@ -393,10 +373,7 @@ class TextifyResponse:
         llm = _require_field(payload, "llm")
         return cls(
             request_id=_require_string(_require_field(payload, "request_id"), "request_id"),
-            artifacts=[
-                TextifiedArtifact.from_json(artifact)
-                for artifact in _require_list(_require_field(payload, "artifacts"), "artifacts")
-            ],
+            source=TextifiedSource.from_json(_require_field(payload, "source")),
             llm=None if llm is None else TextifyLlmSummary.from_json(llm),
             warnings=[
                 _require_string(warning, "warning")
@@ -408,7 +385,7 @@ class TextifyResponse:
         return {
             "textify_response_version": self.textify_response_version,
             "request_id": self.request_id,
-            "artifacts": [artifact.to_json() for artifact in self.artifacts],
+            "source": self.source.to_json(),
             "llm": None if self.llm is None else self.llm.to_json(),
             "warnings": list(self.warnings),
         }

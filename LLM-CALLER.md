@@ -106,7 +106,7 @@ The supported template placeholders are `translation_request_json`,
 `english_confidence_threshold`.
 
 Textifier prompt overrides may additionally use `textify_request_json`,
-`artifact_manifest_json`, `preferred_output_format`, and `suggested_file_policy`.
+`source_manifest_json`, `preferred_output_format`, and `suggested_file_policy`.
 
 Translation caller selection is resolved in this order:
 

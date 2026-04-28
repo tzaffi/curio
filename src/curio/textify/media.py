@@ -2,7 +2,7 @@ import mimetypes
 from pathlib import Path
 
 from curio.llm_caller.local_files import file_sha256 as llm_file_sha256
-from curio.textify.models import Artifact, PreferredOutputFormat
+from curio.textify.models import PreferredOutputFormat, TextifySource
 
 TEXT_MIME_TYPES = frozenset(
     (
@@ -75,21 +75,21 @@ def mime_type_for_path(path: str | Path) -> str | None:
     return normalize_mime_type(guessed)
 
 
-def effective_mime_type(artifact: Artifact) -> str | None:
-    return normalize_mime_type(artifact.mime_type) or mime_type_for_path(artifact.path)
+def effective_mime_type(source: TextifySource) -> str | None:
+    return normalize_mime_type(source.mime_type) or mime_type_for_path(source.path)
 
 
 def file_sha256(path: str | Path) -> str:
     return llm_file_sha256(path)
 
 
-def is_deterministic_text_media(artifact: Artifact) -> bool:
-    mime_type = effective_mime_type(artifact)
-    suffix = Path(artifact.path).suffix.casefold()
+def is_deterministic_text_media(source: TextifySource) -> bool:
+    mime_type = effective_mime_type(source)
+    suffix = Path(source.path).suffix.casefold()
     if mime_type is not None and (mime_type.startswith("text/") or mime_type in TEXT_MIME_TYPES):
         return True
     if suffix in TEXT_EXTENSIONS:
-        return is_probably_plaintext(Path(artifact.path))
+        return is_probably_plaintext(Path(source.path))
     return False
 
 
@@ -116,9 +116,9 @@ def is_probably_plaintext(path: Path, *, sample_size: int = 8192) -> bool:
     return control_count / len(decoded) <= 0.01
 
 
-def is_provider_supported_media(artifact: Artifact) -> bool:
-    mime_type = effective_mime_type(artifact)
-    suffix = Path(artifact.path).suffix.casefold()
+def is_provider_supported_media(source: TextifySource) -> bool:
+    mime_type = effective_mime_type(source)
+    suffix = Path(source.path).suffix.casefold()
     return (
         mime_type in IMAGE_MIME_TYPES
         or mime_type in DOCUMENT_MIME_TYPES
@@ -127,15 +127,15 @@ def is_provider_supported_media(artifact: Artifact) -> bool:
     )
 
 
-def preferred_output_hint(artifact: Artifact, request_preference: PreferredOutputFormat | str) -> str:
+def preferred_output_hint(source: TextifySource, request_preference: PreferredOutputFormat | str) -> str:
     preference = PreferredOutputFormat(request_preference)
     if preference != PreferredOutputFormat.AUTO:
         return preference.value
-    suffix = Path(artifact.path).suffix.casefold()
+    suffix = Path(source.path).suffix.casefold()
     if suffix in {".log", ".txt"}:
         return PreferredOutputFormat.TXT.value
     return PreferredOutputFormat.MARKDOWN.value
 
 
-def source_sha256(artifact: Artifact) -> str:
-    return artifact.sha256 or file_sha256(artifact.path)
+def source_sha256(source: TextifySource) -> str:
+    return source.sha256 or file_sha256(source.path)

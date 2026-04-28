@@ -54,8 +54,7 @@ def make_request(file_part: LocalFileContentPart) -> LlmRequest:
         output=JsonSchemaOutput(name="curio_textify_model_output", schema={"type": "object"}),
         required_capabilities=[LlmCapability.FILE_INPUT, LlmCapability.METERED_PAGE_USAGE],
         metadata={
-            "artifact_id": 1,
-            "artifact_name": file_part.name or "scan.png",
+            "source_name": file_part.name or "scan.png",
             "preferred_output_format": "markdown",
             "suggested_path": "scan.md",
         },
@@ -120,7 +119,7 @@ def test_google_document_ai_client_uses_fake_transport_and_page_usage(tmp_path: 
     assert transport.calls == [(file_part, auth_config, 123)]
     assert response.provider == ProviderName.GOOGLE_DOCUMENT_AI
     assert response.output is not None
-    assert response.output.value["artifacts"][0]["suggested_files"][0]["text"] == "Hello from OCR"
+    assert response.output.value["source"]["suggested_files"][0]["text"] == "Hello from OCR"
     assert response.usage.metered_objects == (MeteredObject("document_ai_pages", 2, "page"),)
     assert response.warnings == ("faint text",)
 
@@ -168,12 +167,12 @@ def test_google_document_ai_output_handles_empty_text_and_top_level_pages(tmp_pa
         {"text": " ", "pages": [{}]},
     )
 
-    assert output["artifacts"][0]["status"] == "no_text_found"
-    assert output["artifacts"][0]["suggested_files"] == []
-    assert output["artifacts"][0]["page_count"] == 1
+    assert output["source"]["status"] == "no_text_found"
+    assert output["source"]["suggested_files"] == []
+    assert output["source"]["page_count"] == 1
 
     blank = build_google_document_ai_output_value(request, file_part, {})
-    assert blank["artifacts"][0]["status"] == "no_text_found"
+    assert blank["source"]["status"] == "no_text_found"
 
     fallback_request = LlmRequest(
         request_id=request.request_id,
@@ -183,15 +182,14 @@ def test_google_document_ai_output_handles_empty_text_and_top_level_pages(tmp_pa
         output=request.output,
         required_capabilities=request.required_capabilities,
         metadata={
-            "artifact_id": 1,
-            "artifact_name": "scan.png",
+            "source_name": "scan.png",
             "preferred_output_format": "other",
         },
     )
     unnamed_part = LocalFileContentPart(path=file_part.path, mime_type=file_part.mime_type, sha256=file_part.sha256)
     fallback = build_google_document_ai_output_value(fallback_request, unnamed_part, {"text": "hello"})
-    assert fallback["artifacts"][0]["suggested_files"][0]["suggested_path"] == "document.md"
-    assert fallback["artifacts"][0]["suggested_files"][0]["output_format"] == "markdown"
+    assert fallback["source"]["suggested_files"][0]["suggested_path"] == "document.md"
+    assert fallback["source"]["suggested_files"][0]["output_format"] == "markdown"
 
 
 def test_google_document_ai_rejects_invalid_transport_payloads(tmp_path: Path) -> None:
@@ -236,7 +234,7 @@ def test_google_document_ai_rejects_bad_request_metadata_and_file_count(tmp_path
         metadata={},
     )
 
-    with pytest.raises(LlmRejectedRequestError, match="artifact_id"):
+    with pytest.raises(LlmRejectedRequestError, match="source_name"):
         build_google_document_ai_output_value(bad_metadata, file_part, {"text": "hello"})
 
     bad_name_metadata = LlmRequest(
@@ -246,9 +244,9 @@ def test_google_document_ai_rejects_bad_request_metadata_and_file_count(tmp_path
         input=request.input,
         output=request.output,
         required_capabilities=request.required_capabilities,
-        metadata={"artifact_id": 1, "artifact_name": ""},
+        metadata={"source_name": ""},
     )
-    with pytest.raises(LlmRejectedRequestError, match="artifact_name"):
+    with pytest.raises(LlmRejectedRequestError, match="source_name"):
         build_google_document_ai_output_value(bad_name_metadata, file_part, {"text": "hello"})
 
     no_file_request = LlmRequest(

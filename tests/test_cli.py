@@ -20,12 +20,12 @@ from curio.llm_caller import (
     ProviderName,
 )
 from curio.textify import (
-    Artifact,
     SuggestedTextFile,
-    TextifiedArtifact,
+    TextifiedSource,
     TextifyLlmSummary,
     TextifyRequest,
     TextifyResponse,
+    TextifySource,
     TextifyStatus,
 )
 from curio.translate import (
@@ -143,27 +143,23 @@ class FakeTextifyService:
         self.requests.append(request)
         return TextifyResponse(
             request_id=request.request_id,
-            artifacts=[
-                TextifiedArtifact(
-                    artifact_id=artifact.artifact_id,
-                    name=artifact.name,
-                    input_mime_type=artifact.mime_type or "image/png",
-                    source_sha256=artifact.sha256 or "sha",
-                    textification_required=True,
-                    status=TextifyStatus.CONVERTED,
-                    suggested_files=[
-                        SuggestedTextFile(
-                            suggested_path="scan.md",
-                            output_format="markdown",
-                            text="# Extracted\n\nVisible text.",
-                        )
-                    ],
-                    detected_languages=["en"],
-                    page_count=1,
-                    warnings=self.artifact_warnings,
-                )
-                for artifact in request.artifacts
-            ],
+            source=TextifiedSource(
+                name=request.source.name,
+                input_mime_type=request.source.mime_type or "image/png",
+                source_sha256=request.source.sha256 or "sha",
+                textification_required=True,
+                status=TextifyStatus.CONVERTED,
+                suggested_files=[
+                    SuggestedTextFile(
+                        suggested_path="scan.md",
+                        output_format="markdown",
+                        text="# Extracted\n\nVisible text.",
+                    )
+                ],
+                detected_languages=["en"],
+                page_count=1,
+                warnings=self.artifact_warnings,
+            ),
             llm=TextifyLlmSummary(
                 provider=ProviderName.CODEX_CLI,
                 model=request.llm_caller,
@@ -891,11 +887,15 @@ def test_textify_media_path_prints_single_suggested_file(monkeypatch: pytest.Mon
     install_fake_textify_service(monkeypatch, service)
 
     result = runner.invoke(app, ["textify", str(artifact_path)])
+    input_file_result = runner.invoke(app, ["textify", "--input-file", str(artifact_path)])
 
     assert result.exit_code == 0
     assert result.output == "# Extracted\n\nVisible text.\n"
+    assert input_file_result.exit_code == 0
+    assert input_file_result.output == "# Extracted\n\nVisible text.\n"
     assert service.requests[0].llm_caller == "textifier_codex_gpt_54_mini"
-    assert service.requests[0].artifacts[0].path == str(artifact_path.resolve())
+    assert service.requests[0].source.path == str(artifact_path.resolve())
+    assert service.requests[1].source.path == str(artifact_path.resolve())
 
 
 def test_textify_json_output_includes_warnings_and_cost(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -929,10 +929,10 @@ def test_textify_json_output_includes_warnings_and_cost(monkeypatch: pytest.Monk
     payload = json.loads(result.output)
     assert payload["textify_response_version"] == "curio-textify-response.v1"
     assert payload["warnings"] == ["provider warning"]
-    assert payload["artifacts"][0]["warnings"] == ["artifact warning"]
+    assert payload["source"]["warnings"] == ["artifact warning"]
     assert payload["llm"]["cost_estimate"]["amount"] == 0.000026
-    assert service.requests[0].artifacts[0].mime_type == "image/png"
-    assert service.requests[0].artifacts[0].source_language_hint == "ja"
+    assert service.requests[0].source.mime_type == "image/png"
+    assert service.requests[0].source.source_language_hint == "ja"
 
 
 def test_textify_non_json_emits_warnings_and_stats(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -969,17 +969,14 @@ def test_textify_structured_request_uses_input_llm_caller(monkeypatch: pytest.Mo
     input_path = tmp_path / "request.json"
     request = TextifyRequest(
         request_id="textify-from-json",
-        artifacts=[
-            Artifact(
-                artifact_id=1,
-                name="scan.png",
-                path=str(artifact_path),
-                mime_type="image/png",
-                sha256="abc",
-                source_language_hint=None,
-                context={},
-            )
-        ],
+        source=TextifySource(
+            name="scan.png",
+            path=str(artifact_path),
+            mime_type="image/png",
+            sha256="abc",
+            source_language_hint=None,
+            context={},
+        ),
         llm_caller="textifier_codex_gpt_55",
     )
     input_path.write_text(json.dumps(request.to_json()), encoding="utf-8")
@@ -1004,7 +1001,15 @@ def test_textify_all_text_media_does_not_require_config(monkeypatch: pytest.Monk
     assert result.exit_code == 0
     payload = json.loads(result.output)
     assert payload["llm"] is None
-    assert payload["artifacts"][0]["status"] == "skipped_text_media"
+    assert payload["source"]["status"] == "skipped_text_media"
+
+    diagnostic = runner.invoke(app, ["textify", str(text_path)])
+    assert diagnostic.exit_code == 0
+    assert diagnostic.output == "[WARNINGS: source is deterministic text media]\n"
+
+    suppressed = runner.invoke(app, ["textify", "--suppress-warnings", str(text_path)])
+    assert suppressed.exit_code == 0
+    assert suppressed.output == ""
 
     stats = runner.invoke(app, ["textify", "--stats", str(text_path)])
     assert stats.exit_code == 0
@@ -1020,12 +1025,14 @@ def test_textify_rejects_bad_inputs_and_missing_caller(monkeypatch: pytest.Monke
 
     no_input = runner.invoke(app, ["textify"])
     both_inputs = runner.invoke(app, ["textify", str(artifact_path), "--input-json", str(artifact_path)])
+    artifact_and_input_file = runner.invoke(app, ["textify", str(artifact_path), "--input-file", str(artifact_path)])
     bad_format = runner.invoke(app, ["textify", "--preferred-output-format", "docx", str(artifact_path)])
     bad_llm = runner.invoke(app, ["textify", "--llm-caller", "", str(artifact_path)])
     missing_caller = runner.invoke(app, ["textify", str(artifact_path)])
 
     assert no_input.exit_code == 2
     assert both_inputs.exit_code == 2
+    assert artifact_and_input_file.exit_code == 2
     assert bad_format.exit_code == 2
     assert bad_llm.exit_code == 2
     assert missing_caller.exit_code == 2
@@ -1041,11 +1048,26 @@ def test_textify_reports_invalid_json_and_option_scope(monkeypatch: pytest.Monke
     invalid_json = runner.invoke(app, ["textify", "--input-json", str(input_path)])
     input_path.write_text(json.dumps({"not": "textify"}), encoding="utf-8")
     bad_scope = runner.invoke(app, ["textify", "--input-json", str(input_path), "--mime-type", "image/png"])
+    input_path.write_text(
+        json.dumps(
+            {
+                "textify_request_version": "curio-textify-request.v1",
+                "request_id": "legacy",
+                "preferred_output_format": "txt",
+                "artifacts": [{"path": str(tmp_path / "scan.png")}],
+                "llm_caller": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    legacy_artifacts = runner.invoke(app, ["textify", "--input-json", str(input_path)])
 
     assert invalid_json.exit_code == 2
     assert "--input-json must contain valid JSON" in invalid_json.output
     assert bad_scope.exit_code == 2
     assert "--mime-type and --source-language" in bad_scope.output
+    assert legacy_artifacts.exit_code == 2
+    assert "textify_request" in legacy_artifacts.output
 
 
 def test_textify_reports_runtime_and_output_write_failures(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -1077,24 +1099,36 @@ def test_textify_default_service_and_resolution_helpers(monkeypatch: pytest.Monk
     service = cli._build_textify_service("textifier_codex_gpt_54_mini", None)
 
     assert service.llm_client is client
-    assert cli._request_textify_llm_caller(TextifyRequest(request_id="textify-test", artifacts=[] if False else [
-        Artifact(artifact_id=1, name="x.txt", path=str(tmp_path / "x.txt"), mime_type="text/plain", sha256="abc")
-    ])) is None
+    assert cli._request_textify_llm_caller(
+        TextifyRequest(
+            request_id="textify-test",
+            source=TextifySource(path=str(tmp_path / "x.txt"), name="x.txt", mime_type="text/plain", sha256="abc"),
+        )
+    ) is None
 
     no_file_response = TextifyResponse(
         request_id="textify-test",
-        artifacts=[
-            TextifiedArtifact(
-                artifact_id=1,
-                name="x",
-                input_mime_type=None,
-                source_sha256=None,
-                textification_required=False,
-                status="skipped_text_media",
-            )
-        ],
+        source=TextifiedSource(
+            name="x",
+            input_mime_type=None,
+            source_sha256=None,
+            textification_required=False,
+            status="skipped_text_media",
+        ),
     )
-    assert cli._render_textify_output(no_file_response, structured_output=False).startswith("{")
+    assert cli._render_textify_output(no_file_response, structured_output=False) == ""
+
+    unsupported_response = TextifyResponse(
+        request_id="textify-test",
+        source=TextifiedSource(
+            name="x",
+            input_mime_type=None,
+            source_sha256=None,
+            textification_required=True,
+            status=TextifyStatus.UNSUPPORTED_MEDIA,
+        ),
+    )
+    assert cli._render_textify_output(unsupported_response, structured_output=False).startswith("{")
 
 
 def test_textify_reports_config_load_error_when_default_caller_is_needed(

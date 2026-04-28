@@ -331,7 +331,7 @@ def test_load_config_parses_llm_caller_prompt_config(tmp_path: Path) -> None:
         "user": "Translate {translation_request_json} with {output_schema_json} at {english_confidence_threshold}",
     }
     payload["llm_callers"]["textifier_codex_gpt_54_mini"]["prompt"] = {
-        "user": "Textify {textify_request_json} {artifact_manifest_json} {preferred_output_format} {suggested_file_policy}"
+        "user": "Textify {textify_request_json} {source_manifest_json} {preferred_output_format} {suggested_file_policy}"
     }
     payload["llm_callers"]["translator_codex_gpt_54_mini"]["prompt"] = {
         "instructions": "Only instructions {request_id}",
@@ -348,7 +348,7 @@ def test_load_config_parses_llm_caller_prompt_config(tmp_path: Path) -> None:
         instructions="Only instructions {request_id}",
     )
     assert config.llm_caller_config("textifier_codex_gpt_54_mini").prompt_config == LlmCallerPromptConfig(
-        user="Textify {textify_request_json} {artifact_manifest_json} {preferred_output_format} {suggested_file_policy}"
+        user="Textify {textify_request_json} {source_manifest_json} {preferred_output_format} {suggested_file_policy}"
     )
 
 
