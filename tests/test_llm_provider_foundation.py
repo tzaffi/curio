@@ -197,6 +197,19 @@ def test_build_json_llm_response_uses_provider_model() -> None:
     assert response.warnings == ("provider warning",)
 
 
+def test_build_json_llm_response_deduplicates_provider_warnings() -> None:
+    response = build_json_llm_response(
+        make_request(),
+        provider="codex_cli",
+        model="provider-model",
+        output_value={"translated_blocks": []},
+        usage=make_usage(),
+        warnings=["transient warning", "transient warning", "other warning", "transient warning"],
+    )
+
+    assert response.warnings == ("transient warning", "other warning")
+
+
 def test_map_provider_error_returns_typed_errors() -> None:
     cases: list[tuple[ProviderErrorKind | str, type[Exception]]] = [
         (ProviderErrorKind.CONFIGURATION, LlmConfigurationError),

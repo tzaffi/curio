@@ -1,0 +1,102 @@
+{
+  "config_path": "config.example.codex_cli.json",
+  "default_caller": "textifier_codex_gpt_54_mini",
+  "environment_opt_ins": {
+    "CURIO_LIVE_CODEX_CLI_TEXTIFY_TESTS": "1"
+  },
+  "git_commit": "09c3fa3c8f75283dd62351d5dd2cfe6f96a1e8fc",
+  "redacted_callers": [
+    {
+      "exec": {
+        "color": "never",
+        "ephemeral": true,
+        "executable": "codex",
+        "extra_config": [],
+        "ignore_user_config": false,
+        "json_events": true,
+        "model_reasoning_effort": "low",
+        "model_verbosity": "low",
+        "sandbox": "read-only",
+        "skip_git_repo_check": false
+      },
+      "has_prompt_instructions": true,
+      "has_prompt_user": true,
+      "model": "gpt-5.4-mini",
+      "name": "textifier_codex_gpt_54_mini",
+      "provider": "codex_cli",
+      "timeout_seconds": 300
+    },
+    {
+      "exec": {
+        "color": "never",
+        "ephemeral": true,
+        "executable": "codex",
+        "extra_config": [],
+        "ignore_user_config": false,
+        "json_events": true,
+        "model_reasoning_effort": "low",
+        "model_verbosity": null,
+        "sandbox": "read-only",
+        "skip_git_repo_check": false
+      },
+      "has_prompt_instructions": true,
+      "has_prompt_user": true,
+      "model": "gpt-5.3-codex",
+      "name": "textifier_codex_gpt_53_codex",
+      "provider": "codex_cli",
+      "timeout_seconds": 300
+    },
+    {
+      "exec": {
+        "color": "never",
+        "ephemeral": true,
+        "executable": "codex",
+        "extra_config": [],
+        "ignore_user_config": false,
+        "json_events": true,
+        "model_reasoning_effort": "low",
+        "model_verbosity": null,
+        "sandbox": "read-only",
+        "skip_git_repo_check": false
+      },
+      "has_prompt_instructions": true,
+      "has_prompt_user": true,
+      "model": "gpt-5.5",
+      "name": "textifier_codex_gpt_55",
+      "provider": "codex_cli",
+      "timeout_seconds": 300
+    }
+  ],
+  "run_root": "/Users/zeph/github/tzaffi/curio/tmp/textify-smoke/20260428-132551-09c3fa3c8f75",
+  "selected_callers": [
+    "textifier_codex_gpt_54_mini",
+    "textifier_codex_gpt_53_codex",
+    "textifier_codex_gpt_55"
+  ],
+  "selected_cases": [
+    "C-IMG-TXT-01",
+    "C-IMG-CODE-01",
+    "C-IMG-CODE-02",
+    "C-IMG-MULTI-01",
+    "C-IMG-POST-01",
+    "C-PDF-DOC-01",
+    "C-PDF-TABLE-01",
+    "C-IMG-RECEIPT-01",
+    "C-IMG-NO-TEXT-01",
+    "R-IMG-DASH-01",
+    "R-IMG-LLM-TABLE-01",
+    "R-IMG-INFOGRAPHIC-01",
+    "R-IMG-PAPER-PAGE-01",
+    "R-IMG-CHARTS-01",
+    "R-IMG-TERMINAL-01",
+    "R-IMG-ASCII-DIAGRAM-01",
+    "R-IMG-COMPARISON-TABLE-01",
+    "R-IMG-NO-TEXT-REAL-01",
+    "C-IMG-DIR-TREE-01",
+    "R-PDF-PAPER-01",
+    "R-HTML-ARXIV-01",
+    "R-HTML-GITHUB-README-01",
+    "R-JSON-XARTICLE-CODE-01",
+    "R-ZIP-REPO-01"
+  ]
+}

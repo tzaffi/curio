@@ -249,4 +249,5 @@ make textify-smoke-evaluate
 
 See [SMOKE-TESTS.md](SMOKE-TESTS.md) for prerequisites, the reviewed case/model
 matrix, artifact locations, evaluator workflow, and common failure messages.
-See [the current smoke-test upshot](reports/translate-smoke/20260426-060103-22de460b22c0/UPSHOT.md) for the recommended translation caller.
+See [the current translation smoke-test upshot](reports/translate-smoke/20260426-060103-22de460b22c0/UPSHOT.md) for the recommended translation caller.
+See [the current textify smoke-test upshot](reports/textify-smoke/20260428-132551-09c3fa3c8f75/UPSHOT.md) for the recommended textify caller.

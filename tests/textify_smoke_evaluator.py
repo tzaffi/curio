@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from textify_smoke_helpers import TEXTIFY_SMOKE_CALLERS, TEXTIFY_SMOKE_CASES
+
 JsonObject = dict[str, Any]
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -14,6 +16,7 @@ DEFAULT_REPORT_ROOT = REPO_ROOT / "reports" / "textify-smoke"
 DEFAULT_EVALUATOR_MODEL = "gpt-5.5"
 DEFAULT_EVALUATOR_REASONING_EFFORT = "xhigh"
 DEFAULT_EVALUATOR_VERBOSITY = "medium"
+EXPECTED_EVALUATOR_RECORD_COUNT = len(TEXTIFY_SMOKE_CASES) * len(TEXTIFY_SMOKE_CALLERS)
 
 EVALUATOR_PROMPT_TEMPLATE = """You are the Checkpoint 8G textify evaluator for Curio.
 
@@ -53,9 +56,13 @@ class TextifyEvaluatorError(RuntimeError):
 
 def resolve_run_root(run_root: str, *, smoke_root: Path = DEFAULT_SMOKE_ROOT) -> Path:
     if run_root == "latest":
-        runs = sorted(path for path in smoke_root.iterdir() if (path / "evaluation" / "evaluator-input.jsonl").exists())
+        runs = sorted(
+            path
+            for path in smoke_root.iterdir()
+            if _evaluator_record_count(path / "evaluation" / "evaluator-input.jsonl") == EXPECTED_EVALUATOR_RECORD_COUNT
+        )
         if not runs:
-            raise TextifyEvaluatorError(f"no textify smoke runs with evaluator input found under {smoke_root}")
+            raise TextifyEvaluatorError(f"no complete textify smoke runs with evaluator input found under {smoke_root}")
         return runs[-1]
     path = Path(run_root)
     if not path.is_absolute():
@@ -140,10 +147,24 @@ def publish_report_artifacts(
 ) -> Path:
     report_dir = report_root / artifacts.run_root.name
     report_dir.mkdir(parents=True, exist_ok=True)
+    _copy_if_exists(artifacts.run_root / "manifest.json", report_dir / "manifest.json")
+    _copy_if_exists(artifacts.evaluator_input_path, report_dir / "evaluator-input.jsonl")
     _copy_if_exists(artifacts.output_path, report_dir / "evaluator-output.md")
     _copy_if_exists(artifacts.payload_path, report_dir / "evaluator-payload.json")
+    _copy_if_exists(artifacts.prompt_path, report_dir / "evaluator-prompt.md")
+    _copy_if_exists(artifacts.events_path, report_dir / "evaluator-run.jsonl")
     (report_dir / "README.md").write_text(
-        f"# Textify Smoke Report {artifacts.run_root.name}\n\nRecords: {artifacts.record_count}\n",
+        (
+            f"# Textify Smoke Report {artifacts.run_root.name}\n\n"
+            f"Records: {artifacts.record_count}\n\n"
+            "- `UPSHOT.md`: caller recommendation, escalation policy, and known risks.\n"
+            "- `evaluator-output.md`: evaluator scoring matrix and per-case preference notes.\n"
+            "- `evaluator-input.jsonl`: compact row-oriented evaluator input.\n"
+            "- `evaluator-payload.json`: normalized evaluator payload used for the run.\n"
+            "- `evaluator-prompt.md`: exact evaluator prompt plus payload.\n"
+            "- `evaluator-run.jsonl`: Codex evaluator event stream.\n"
+            "- `manifest.json`: live smoke run metadata.\n"
+        ),
         encoding="utf-8",
     )
     return report_dir
@@ -158,6 +179,12 @@ def _read_jsonl(path: Path) -> list[JsonObject]:
                 raise TextifyEvaluatorError(f"JSONL record in {path} must be an object")
             records.append(value)
     return records
+
+
+def _evaluator_record_count(path: Path) -> int:
+    if not path.exists():
+        return 0
+    return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
 
 
 def _write_json(path: Path, payload: JsonObject) -> None:

@@ -120,20 +120,26 @@ The current completed report is indexed from [reports/README.md](reports/README.
 
 ## Result Policy
 
-Live smoke pass/fail checks verify schema validity, caller selection, pass-through behavior, and artifact retention. Translation quality decisions come from the evaluator report, not from pytest assertions, unless a future checkpoint promotes an evaluator threshold into the gate.
+Live smoke pass/fail checks verify schema validity, caller selection,
+pass-through behavior, and artifact retention. Translation and textification
+quality decisions come from evaluator reports, not from pytest assertions,
+unless a future checkpoint promotes an evaluator threshold into the gate.
 
 ## Textify Smoke Tests
 
 The textify smoke suite is also opt-in and Codex CLI-only for v1. It is skipped
 from default `make check`.
 
-The planned caller matrix is:
+The active Codex CLI caller matrix is:
 
 | Caller | Model | Purpose |
 | --- | --- | --- |
-| `textifier_codex_gpt_54_nano` | `gpt-5.4-nano` | cheapest extraction candidate |
 | `textifier_codex_gpt_54_mini` | `gpt-5.4-mini` | likely default balance |
+| `textifier_codex_gpt_53_codex` | `gpt-5.3-codex` | Codex-optimized cost/quality comparison |
 | `textifier_codex_gpt_55` | `gpt-5.5` | frontier reliability baseline |
+
+`gpt-5.4-nano` is not included because Codex CLI rejects it when using
+ChatGPT auth.
 
 List live textify smoke tests without running them:
 
@@ -181,3 +187,6 @@ The textify evaluator should judge OCR/text fidelity, source-language
 preservation, document structure, suggested filenames/extensions/paths,
 multi-file handling, warning quality, and cost. It should produce the final
 model recommendation after live smoke data exists.
+
+The current textify recommendation is recorded in
+[reports/textify-smoke/20260428-132551-09c3fa3c8f75/UPSHOT.md](reports/textify-smoke/20260428-132551-09c3fa3c8f75/UPSHOT.md).

@@ -945,6 +945,12 @@ def test_textify_non_json_emits_warnings_and_stats(monkeypatch: pytest.MonkeyPat
     )
     install_fake_textify_service(monkeypatch, service)
 
+    warnings_only = runner.invoke(app, ["textify", str(artifact_path)])
+    assert warnings_only.exit_code == 0
+    assert "[WARNINGS: provider warning]" in warnings_only.output
+    assert "[WARNINGS: artifact warning]" in warnings_only.output
+    assert "[STATS:" not in warnings_only.output
+
     result = runner.invoke(app, ["textify", "--stats", str(artifact_path)])
 
     assert result.exit_code == 0

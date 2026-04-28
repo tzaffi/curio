@@ -12,8 +12,9 @@ semantic labeling of iMsgX artifacts in preparation for a knowledgebase
 - [BOOTSTRAP.md](BOOTSTRAP.md) defines bootstrap label-registry runs.
 - [AUTHENTICATION.md](AUTHENTICATION.md) defines local OpenAI/Codex secret storage and login setup.
 - [USAGE.md](USAGE.md) explains `config.json`, checked-in config examples, and provider setup.
-- [SMOKE-TESTS.md](SMOKE-TESTS.md) explains the opt-in live translation smoke tests and evaluator workflow.
+- [SMOKE-TESTS.md](SMOKE-TESTS.md) explains the opt-in live translation/textify smoke tests and evaluator workflow.
 - [reports/translate-smoke/20260426-060103-22de460b22c0/UPSHOT.md](reports/translate-smoke/20260426-060103-22de460b22c0/UPSHOT.md) records the current translation model recommendation from the smoke/evaluator report.
+- [reports/textify-smoke/20260428-132551-09c3fa3c8f75/UPSHOT.md](reports/textify-smoke/20260428-132551-09c3fa3c8f75/UPSHOT.md) records the current textify model recommendation from the smoke/evaluator report.
 - [schemas/llm_request.schema.json](schemas/llm_request.schema.json) and [schemas/llm_response.schema.json](schemas/llm_response.schema.json) define the provider-neutral LLM JSON contracts.
 - [schemas/translation_request.schema.json](schemas/translation_request.schema.json) and [schemas/translation_response.schema.json](schemas/translation_response.schema.json) define the standalone translation JSON contracts.
 - [schemas/textify_request.schema.json](schemas/textify_request.schema.json) and [schemas/textify_response.schema.json](schemas/textify_response.schema.json) define the standalone textify JSON contracts.

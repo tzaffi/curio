@@ -33,8 +33,8 @@ DEFAULT_TEXTIFY_SMOKE_ROOT = REPO_ROOT / "tmp" / "textify-smoke"
 TEXTIFY_SMOKE_FIXTURE_ROOT = REPO_ROOT / "tests" / "fixtures" / "textify_smoke"
 TEXTIFY_SMOKE_FIXTURE_MANIFEST = TEXTIFY_SMOKE_FIXTURE_ROOT / "manifest.json"
 TEXTIFY_SMOKE_CALLERS = (
-    "textifier_codex_gpt_54_nano",
     "textifier_codex_gpt_54_mini",
+    "textifier_codex_gpt_53_codex",
     "textifier_codex_gpt_55",
 )
 
@@ -219,6 +219,7 @@ GENERATED_TEXTIFY_SMOKE_CASES = (
         expected_textification_intent="Return no_text_found for an image with no readable text and do not invent alt text.",
         ground_truth_text="",
         preservation_requirements=("no invented description", "compact warning"),
+        expected_status="no_text_found",
     ),
 )
 

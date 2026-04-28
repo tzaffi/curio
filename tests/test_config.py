@@ -108,20 +108,35 @@ def test_checked_in_codex_example_config_parses() -> None:
     assert gpt54_config.codex_exec_config.model_verbosity == CodexCliVerbosity.MEDIUM
     assert_default_translation_prompt_config(gpt54_config.prompt_config)
 
-    textifier_config = config.llm_caller_config("textifier_codex_gpt_54_nano")
+    textifier_config = config.llm_caller_config("textifier_codex_gpt_54_mini")
     assert textifier_config.provider == ProviderName.CODEX_CLI
-    assert textifier_config.model == "gpt-5.4-nano"
+    assert textifier_config.model == "gpt-5.4-mini"
     assert textifier_config.pricing_config == LlmPricing(
         currency="USD",
         basis="api_equivalent",
-        input_price_per_million=0.2,
-        cached_input_price_per_million=0.02,
-        output_price_per_million=1.25,
+        input_price_per_million=0.75,
+        cached_input_price_per_million=0.075,
+        output_price_per_million=4.5,
     )
     assert textifier_config.prompt_config == LlmCallerPromptConfig(
         instructions="Return only JSON that satisfies the provided schema. Extract source-language text from the supplied local media.",
         user=textifier_config.prompt_config.user,
     )
+
+    codex_textifier_config = config.llm_caller_config("textifier_codex_gpt_53_codex")
+    assert codex_textifier_config.provider == ProviderName.CODEX_CLI
+    assert codex_textifier_config.model == "gpt-5.3-codex"
+    assert codex_textifier_config.pricing_config == LlmPricing(
+        currency="USD",
+        basis="api_equivalent",
+        input_price_per_million=1.75,
+        cached_input_price_per_million=0.175,
+        output_price_per_million=14.0,
+    )
+    assert codex_textifier_config.codex_exec_config is not None
+    assert codex_textifier_config.codex_exec_config.model_reasoning_effort == CodexCliReasoningEffort.LOW
+    assert codex_textifier_config.codex_exec_config.model_verbosity is None
+    assert codex_textifier_config.prompt_config == textifier_config.prompt_config
 
 
 def test_checked_in_openai_example_config_parses() -> None:

@@ -7,9 +7,13 @@ TRANSLATE_SMOKE_RUN ?= latest
 TEXTIFY_SMOKE_RUN ?= latest
 OPTS ?=
 TEXT ?=
+ARTIFACT ?=
+DOWNLOADS ?= $(HOME)/Desktop/iMsgX/downloads
+CURIO_TEXTIFY := cd "$(DOWNLOADS)" && $(UV) --project "$(CURDIR)" run python -m curio textify --config "$(CURDIR)/config.json"
 export TEXT
+export ARTIFACT
 
-.PHONY: help sync test translate-smoke translate-smoke-collect translate-smoke-evaluate translate-smoke-report textify-smoke textify-smoke-collect textify-smoke-evaluate textify-smoke-report lint lint-fix typecheck check curio cli-help translate translate-genius translate-help textify-help build-wheel
+.PHONY: help sync test translate-smoke translate-smoke-collect translate-smoke-evaluate translate-smoke-report textify-smoke textify-smoke-collect textify-smoke-evaluate textify-smoke-report lint lint-fix typecheck check curio cli-help translate translate-genius translate-help textify textify-genius textify-help build-wheel
 
 help:
 	@printf '%s\n' \
@@ -18,6 +22,8 @@ help:
 		'make curio ARGS="..."         Run Curio CLI with arbitrary arguments' \
 		'make translate                 Run curio translate; pass TEXT="..." and/or OPTS="..."' \
 		'make translate-genius          Run curio translate with translator_codex_gpt_55' \
+		'make textify                   Run curio textify; pass ARTIFACT="...", DOWNLOADS="...", and/or OPTS="..."' \
+		'make textify-genius            Run curio textify with textifier_codex_gpt_55; accepts DOWNLOADS="..."' \
 		'make translate-smoke          Run opt-in live Codex CLI translation smoke tests' \
 		'make translate-smoke-collect  List opt-in live Codex CLI translation smoke tests' \
 		'make translate-smoke-evaluate Run evaluator for TRANSLATE_SMOKE_RUN=latest' \
@@ -94,6 +100,20 @@ translate-genius:
 		printf '%s' "$$TEXT" | $(CURIO) translate $(OPTS) --llm-caller translator_codex_gpt_55; \
 	else \
 		$(CURIO) translate $(OPTS) --llm-caller translator_codex_gpt_55; \
+	fi
+
+textify:
+	@if [ -n "$$ARTIFACT" ]; then \
+		$(CURIO_TEXTIFY) $(OPTS) "$$ARTIFACT"; \
+	else \
+		$(CURIO_TEXTIFY) $(OPTS); \
+	fi
+
+textify-genius:
+	@if [ -n "$$ARTIFACT" ]; then \
+		$(CURIO_TEXTIFY) $(OPTS) --llm-caller textifier_codex_gpt_55 "$$ARTIFACT"; \
+	else \
+		$(CURIO_TEXTIFY) $(OPTS) --llm-caller textifier_codex_gpt_55; \
 	fi
 
 translate-help:

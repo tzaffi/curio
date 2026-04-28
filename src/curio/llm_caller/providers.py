@@ -152,8 +152,19 @@ def build_json_llm_response(
         model=model,
         output=LlmOutput(value=output_value),
         usage=usage,
-        warnings=warnings,
+        warnings=_unique_preserving_order(warnings),
     )
+
+
+def _unique_preserving_order(values: Sequence[str]) -> tuple[str, ...]:
+    unique_values: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        unique_values.append(value)
+    return tuple(unique_values)
 
 
 def map_provider_error(kind: ProviderErrorKind | str, detail: str) -> LlmCallerError:

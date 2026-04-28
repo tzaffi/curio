@@ -8,5 +8,4 @@ Durable run reports live here. These are curated artifacts copied out of tempora
 
 ## Textify Smoke Reports
 
-No live textify smoke report has been run yet. Reports will live under
-`reports/textify-smoke/{run_id}/` after an opt-in run and evaluator pass.
+- [20260428-132551-09c3fa3c8f75](textify-smoke/20260428-132551-09c3fa3c8f75/UPSHOT.md): Checkpoint 8 Codex CLI textify smoke run, evaluator grading, and caller recommendation.

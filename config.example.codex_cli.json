@@ -33,7 +33,7 @@
         "color": "never",
         "ephemeral": true,
         "json_events": true,
-        "skip_git_repo_check": false,
+        "skip_git_repo_check": true,
         "ignore_user_config": false,
         "model_reasoning_effort": "low",
         "model_verbosity": null,
@@ -67,7 +67,7 @@
         "color": "never",
         "ephemeral": true,
         "json_events": true,
-        "skip_git_repo_check": false,
+        "skip_git_repo_check": true,
         "ignore_user_config": false,
         "model_reasoning_effort": "low",
         "model_verbosity": "low",
@@ -101,7 +101,7 @@
         "color": "never",
         "ephemeral": true,
         "json_events": true,
-        "skip_git_repo_check": false,
+        "skip_git_repo_check": true,
         "ignore_user_config": false,
         "model_reasoning_effort": "low",
         "model_verbosity": "medium",
@@ -135,7 +135,7 @@
         "color": "never",
         "ephemeral": true,
         "json_events": true,
-        "skip_git_repo_check": false,
+        "skip_git_repo_check": true,
         "ignore_user_config": false,
         "model_reasoning_effort": "low",
         "model_verbosity": null,
@@ -169,23 +169,23 @@
         "color": "never",
         "ephemeral": true,
         "json_events": true,
-        "skip_git_repo_check": false,
+        "skip_git_repo_check": true,
         "ignore_user_config": false,
         "model_reasoning_effort": "low",
         "model_verbosity": "low",
         "extra_config": []
       }
     },
-    "textifier_codex_gpt_54_nano": {
+    "textifier_codex_gpt_53_codex": {
       "provider": "codex_cli",
-      "model": "gpt-5.4-nano",
+      "model": "gpt-5.3-codex",
       "timeout_seconds": 300,
       "pricing": {
         "currency": "USD",
         "basis": "api_equivalent",
-        "input_price_per_million": 0.2,
-        "cached_input_price_per_million": 0.02,
-        "output_price_per_million": 1.25
+        "input_price_per_million": 1.75,
+        "cached_input_price_per_million": 0.175,
+        "output_price_per_million": 14.0
       },
       "prompt": {
         "instructions": "Return only JSON that satisfies the provided schema. Extract source-language text from the supplied local media.",
@@ -203,10 +203,10 @@
         "color": "never",
         "ephemeral": true,
         "json_events": true,
-        "skip_git_repo_check": false,
+        "skip_git_repo_check": true,
         "ignore_user_config": false,
         "model_reasoning_effort": "low",
-        "model_verbosity": "low",
+        "model_verbosity": null,
         "extra_config": []
       }
     }

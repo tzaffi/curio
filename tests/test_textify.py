@@ -320,6 +320,8 @@ def test_textify_service_marks_unsupported_without_llm(tmp_path: Path) -> None:
     assert response.llm is None
     assert response.source.status == TextifyStatus.UNSUPPORTED_MEDIA
     assert response.source.textification_required is True
+    assert response.warnings == ()
+    assert response.source.warnings == ("unsupported media type for textify v1",)
     validate_json(response.to_json(), SchemaName.TEXTIFY_RESPONSE)
 
 

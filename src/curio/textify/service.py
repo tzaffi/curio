@@ -34,27 +34,21 @@ class TextifyService:
 
     def textify(self, request: TextifyRequest) -> TextifyResponse:
         source = request.source
-        warnings: list[str] = []
         skipped = _deterministic_skip_source(source)
         if skipped is not None:
             return TextifyResponse(request_id=request.request_id, source=skipped)
         unsupported = _unsupported_source(source)
         if unsupported is not None:
-            return TextifyResponse(
-                request_id=request.request_id,
-                source=unsupported,
-                warnings=_unique_warnings(list(unsupported.warnings)),
-            )
+            return TextifyResponse(request_id=request.request_id, source=unsupported)
         if self.llm_client is None:
             raise TextifyRequestError("llm_client is required for non-text media")
         llm_response = self.llm_client.complete(build_textify_llm_request(request, source, self.prompt_config))
         textified_source = textified_source_from_llm_response(request, source, llm_response)
-        warnings.extend(llm_response.warnings)
         return TextifyResponse(
             request_id=request.request_id,
             source=textified_source,
             llm=_summarize_llm_response(llm_response, self.pricing_config),
-            warnings=_unique_warnings(warnings),
+            warnings=llm_response.warnings,
         )
 
 
@@ -101,7 +95,3 @@ def _summarize_llm_response(
         usage=usage,
         cost_estimate=estimate_llm_cost(usage, pricing_config),
     )
-
-
-def _unique_warnings(warnings: list[str]) -> tuple[str, ...]:
-    return tuple(dict.fromkeys(warnings))

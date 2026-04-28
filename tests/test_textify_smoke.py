@@ -118,8 +118,8 @@ def make_textify_response() -> TextifyResponse:
 
 def test_textify_smoke_case_matrix_is_reviewed_shape() -> None:
     assert TEXTIFY_SMOKE_CALLERS == (
-        "textifier_codex_gpt_54_nano",
         "textifier_codex_gpt_54_mini",
+        "textifier_codex_gpt_53_codex",
         "textifier_codex_gpt_55",
     )
     case_ids = [case.case_id for case in TEXTIFY_SMOKE_CASES]
@@ -293,7 +293,7 @@ def test_generated_fixtures_and_requests_include_metadata(tmp_path: Path) -> Non
     checked_in_source = write_textify_smoke_fixture(checked_in_case, tmp_path)
     request = build_textify_smoke_request(image_case, TEXTIFY_SMOKE_CALLERS[0], image_source)
 
-    assert request.llm_caller == "textifier_codex_gpt_54_nano"
+    assert request.llm_caller == "textifier_codex_gpt_54_mini"
     assert request.preferred_output_format == "txt"
     assert image_source.sha256 is not None
     assert Path(image_source.path).read_bytes().startswith(b"\x89PNG")
@@ -404,7 +404,7 @@ def test_redacted_caller_summary_includes_no_secret_values() -> None:
         "color": "never",
         "ephemeral": True,
         "json_events": True,
-        "skip_git_repo_check": False,
+        "skip_git_repo_check": True,
         "ignore_user_config": False,
         "model_reasoning_effort": "low",
         "model_verbosity": "low",

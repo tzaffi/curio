@@ -302,7 +302,7 @@ def test_redacted_caller_summary_includes_no_secret_values() -> None:
         "color": "never",
         "ephemeral": True,
         "json_events": True,
-        "skip_git_repo_check": False,
+        "skip_git_repo_check": True,
         "ignore_user_config": False,
         "model_reasoning_effort": "low",
         "model_verbosity": "low",
