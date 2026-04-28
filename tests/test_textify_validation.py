@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+import curio.textify.validation as validation
 from curio.llm_caller import LlmOutput, LlmResponse, LlmStatus, LlmUsage, ProviderName
 from curio.textify import (
     TextifyRequest,
@@ -10,6 +11,7 @@ from curio.textify import (
     file_sha256,
 )
 from curio.textify.validation import (
+    MARKDOWN_CODE_FENCE_REPAIR_WARNING,
     textified_source_from_llm_response,
     validate_textified_model_source,
     validate_textify_model_output,
@@ -92,6 +94,57 @@ def test_textified_source_from_llm_response_validates_and_assembles(tmp_path: Pa
     assert textified_source.suggested_files[0].text == "# Scan"
 
 
+def test_textified_source_repairs_single_outer_markdown_code_fence(tmp_path: Path) -> None:
+    source = make_source(tmp_path / "scan.png")
+    request = TextifyRequest(request_id="textify-test", source=source)
+
+    textified_source = textified_source_from_llm_response(
+        request,
+        source,
+        make_response(
+            output_payload(
+                suggested_files=[
+                    {
+                        "suggested_path": "scan.md",
+                        "output_format": "markdown",
+                        "text": "```markdown\n# Scan\n\nhello\n```",
+                    }
+                ],
+            )
+        ),
+    )
+
+    assert textified_source.suggested_files[0].text == "# Scan\n\nhello"
+    assert textified_source.warnings == (MARKDOWN_CODE_FENCE_REPAIR_WARNING,)
+
+
+def test_textify_code_fence_repair_rejects_empty_repaired_content(tmp_path: Path) -> None:
+    source = make_source(tmp_path / "scan.png")
+    request = TextifyRequest(request_id="textify-test", source=source)
+
+    with pytest.raises(TextifyResponseError, match="empty text"):
+        textified_source_from_llm_response(
+            request,
+            source,
+            make_response(
+                output_payload(
+                    suggested_files=[
+                        {
+                            "suggested_path": "scan.md",
+                            "output_format": "markdown",
+                            "text": "```\n\n```",
+                        }
+                    ],
+                )
+            ),
+        )
+
+
+def test_textify_code_fence_repair_ignores_non_outer_fences() -> None:
+    assert validation._unwrap_single_outer_markdown_code_fence("```mark`down\n# Scan\n```") is None
+    assert validation._unwrap_single_outer_markdown_code_fence("```markdown\n# Scan\n~~~") is None
+
+
 def test_textify_validation_rejects_response_level_failures(tmp_path: Path) -> None:
     source = make_source(tmp_path / "scan.png")
     request = TextifyRequest(request_id="textify-test", source=source)
@@ -139,15 +192,28 @@ def test_textify_validation_rejects_status_and_file_errors(tmp_path: Path) -> No
     with pytest.raises(TextifyResponseError, match="non-converted sources"):
         validate_textified_model_source(source, output_payload(status="no_text_found")["source"])
 
-    with pytest.raises(TextifyResponseError, match="code fence"):
+    validate_textified_model_source(
+        source,
+        output_payload(
+            suggested_files=[
+                {
+                    "suggested_path": "scan.md",
+                    "output_format": "markdown",
+                    "text": "```\nhello\n```",
+                }
+            ]
+        )["source"],
+    )
+
+    with pytest.raises(TextifyResponseError, match="safe relative path"):
         validate_textified_model_source(
             source,
             output_payload(
                 suggested_files=[
                     {
-                        "suggested_path": "scan.md",
+                        "suggested_path": "/tmp/scan.md",
                         "output_format": "markdown",
-                        "text": "```\nhello\n```",
+                        "text": "```markdown\nhello\n```",
                     }
                 ]
             )["source"],

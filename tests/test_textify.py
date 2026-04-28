@@ -36,6 +36,7 @@ from curio.textify import (
     source_sha256,
     validate_suggested_path,
 )
+from curio.textify.validation import MARKDOWN_CODE_FENCE_REPAIR_WARNING
 
 
 def write_file(path: Path, data: bytes) -> Path:
@@ -340,6 +341,29 @@ def test_textify_service_converts_with_fake_client_and_cost(tmp_path: Path) -> N
     assert response.source.suggested_files[0].text == "# Receipt\n\n合計 1200円"
     assert response.llm is not None
     assert response.llm.cost_estimate == LlmCostEstimate("USD", "api_equivalent", 0.00016575, 0.75, 0.075, 4.5)
+    assert response.warnings == ("provider warning",)
+
+
+def test_textify_service_repairs_outer_markdown_code_fence_with_warning(tmp_path: Path) -> None:
+    artifact_path = write_file(tmp_path / "scan.png", b"png")
+    request = make_request(artifact_path)
+    client = RecordingLlmClient(
+        converted_output(
+            name="scan.png",
+            suggested_files=[
+                {
+                    "suggested_path": "scan.md",
+                    "output_format": "markdown",
+                    "text": "```markdown\n# Receipt\n\nTotal 1200 yen\n```",
+                }
+            ],
+        )
+    )
+
+    response = TextifyService(llm_client=client).textify(request)
+
+    assert response.source.suggested_files[0].text == "# Receipt\n\nTotal 1200 yen"
+    assert response.source.warnings == ("low contrast", MARKDOWN_CODE_FENCE_REPAIR_WARNING)
     assert response.warnings == ("provider warning",)
 
 

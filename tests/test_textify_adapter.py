@@ -45,6 +45,7 @@ def test_textify_model_output_schema_and_prompt_values(tmp_path: Path) -> None:
     assert values["preferred_output_format"] == "markdown"
     assert SUGGESTED_FILE_POLICY in build_textify_prompt(request, source)
     assert "Do not translate" in build_textify_prompt(request, source)
+    assert "Do not wrap the entire Markdown output in one code fence" in build_textify_prompt(request, source)
     assert "Return only JSON" in build_textify_instructions(request, source)
     assert DEFAULT_TEXTIFY_INSTRUCTIONS.startswith("Return only JSON")
     assert "{textify_request_json}" in DEFAULT_TEXTIFY_USER_PROMPT_TEMPLATE

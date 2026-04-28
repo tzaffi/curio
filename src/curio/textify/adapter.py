@@ -36,6 +36,7 @@ DEFAULT_TEXTIFY_USER_PROMPT_TEMPLATE = "\n".join(
         "- Do not summarize or interpret.",
         "- Preserve reading order and meaningful line breaks.",
         "- Use Markdown for headings, lists, tables, and document structure.",
+        "- Do not wrap the entire Markdown output in one code fence unless the source itself is code, logs, or terminal output.",
         "- Use plain text or a natural code/config/log extension when the source is a flat file screenshot.",
         "- Suggest one or more safe relative output paths.",
         "- Preserve visible filenames exactly and infer extensions only when obvious.",
