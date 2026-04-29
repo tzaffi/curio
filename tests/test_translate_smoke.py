@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from curio.config import CurioConfig, TranslateConfig
+from curio.config import CurioConfig, PipelineConfig, TranslateConfig
 from curio.llm_caller import (
     LlmOutput,
     LlmRequest,
@@ -147,6 +147,10 @@ def test_select_codex_smoke_caller_reports_config_and_provider_errors(tmp_path: 
     config_path.write_text(
         json.dumps(
             {
+                "pipeline": {
+                    "downloads_dir": "downloads",
+                    "artifact_root": None,
+                },
                 "llm_callers": {
                     "translator_openai": {
                         "provider": "openai_api",
@@ -290,6 +294,7 @@ def test_redacted_caller_summary_includes_no_secret_values() -> None:
                 timeout_seconds=300,
             )
         },
+        pipeline_config=PipelineConfig(downloads_dir=repo_root() / "downloads"),
         translate_config=TranslateConfig(llm_caller="translator_openai"),
     ).llm_caller_config("translator_openai")
 

@@ -1,3 +1,5 @@
+from curio.pipeline.local import LocalArtifactStore
+from curio.pipeline.memory import InMemoryArtifactStore, InMemoryPipelineStore
 from curio.pipeline.models import (
     ArtifactRef,
     ArtifactStore,
@@ -15,6 +17,20 @@ from curio.pipeline.models import (
     TextifyProcessStatus,
     TranslateProcessStatus,
 )
+from curio.pipeline.processors import (
+    TEXTIFY_PROCESSOR_VERSION,
+    TRANSLATE_PROCESSOR_VERSION,
+    TextifyProcessor,
+    TranslateProcessor,
+)
+from curio.pipeline.scheduler import (
+    PipelineRunResult,
+    ProcessorRunResult,
+    ProcessorRunStatus,
+    run_artifact_through,
+    run_processor_once,
+    run_stage,
+)
 
 __all__ = [
     "ArtifactRef",
@@ -30,6 +46,19 @@ __all__ = [
     "ProcessRef",
     "Processor",
     "ProcessorObject",
+    "InMemoryArtifactStore",
+    "InMemoryPipelineStore",
+    "LocalArtifactStore",
+    "PipelineRunResult",
+    "ProcessorRunResult",
+    "ProcessorRunStatus",
+    "TEXTIFY_PROCESSOR_VERSION",
+    "TRANSLATE_PROCESSOR_VERSION",
+    "TextifyProcessor",
+    "TranslateProcessor",
     "TextifyProcessStatus",
     "TranslateProcessStatus",
+    "run_artifact_through",
+    "run_processor_once",
+    "run_stage",
 ]

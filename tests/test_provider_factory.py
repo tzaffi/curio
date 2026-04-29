@@ -1,8 +1,9 @@
 from collections.abc import Mapping
+from pathlib import Path
 
 import pytest
 
-from curio.config import CurioConfig, LlmCallerConfig
+from curio.config import CurioConfig, LlmCallerConfig, PipelineConfig
 from curio.llm_caller import (
     CodexCliAuthConfig,
     CodexCliClient,
@@ -74,6 +75,7 @@ def make_secret_store() -> InMemorySecretStore:
 
 def make_config() -> CurioConfig:
     return CurioConfig(
+        pipeline_config=PipelineConfig(downloads_dir=Path("downloads")),
         llm_callers={
             "translator_codex_gpt_55": LlmCallerConfig(
                 name="translator_codex_gpt_55",
@@ -245,7 +247,8 @@ def test_build_llm_caller_client_requires_explicit_config_and_dependencies(tmp_p
 
 
 def test_llm_caller_factory_rejects_missing_or_mismatched_caller_config(tmp_path) -> None:
-    empty_config = CurioConfig(llm_callers={})
+    pipeline_config = PipelineConfig(downloads_dir=tmp_path / "downloads")
+    empty_config = CurioConfig(llm_callers={}, pipeline_config=pipeline_config)
     factory = LlmCallerFactory(
         config=empty_config,
         secret_store=make_secret_store(),
@@ -257,6 +260,7 @@ def test_llm_caller_factory_rejects_missing_or_mismatched_caller_config(tmp_path
         factory.create("translator_codex_gpt_55")
 
     mismatched_codex = CurioConfig(
+        pipeline_config=pipeline_config,
         llm_callers={
             "bad_codex": LlmCallerConfig(
                 name="bad_codex",
@@ -278,6 +282,7 @@ def test_llm_caller_factory_rejects_missing_or_mismatched_caller_config(tmp_path
         ).create("bad_codex")
 
     missing_codex_exec = CurioConfig(
+        pipeline_config=pipeline_config,
         llm_callers={
             "bad_codex": LlmCallerConfig(
                 name="bad_codex",
@@ -298,6 +303,7 @@ def test_llm_caller_factory_rejects_missing_or_mismatched_caller_config(tmp_path
         ).create("bad_codex")
 
     mismatched_openai = CurioConfig(
+        pipeline_config=pipeline_config,
         llm_callers={
             "bad_openai": LlmCallerConfig(
                 name="bad_openai",
@@ -318,6 +324,7 @@ def test_llm_caller_factory_rejects_missing_or_mismatched_caller_config(tmp_path
         ).create("bad_openai")
 
     mismatched_google = CurioConfig(
+        pipeline_config=pipeline_config,
         llm_callers={
             "bad_google": LlmCallerConfig(
                 name="bad_google",

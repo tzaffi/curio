@@ -82,8 +82,21 @@ def test_pipeline_root_exports_contracts() -> None:
         "ProcessRef",
         "Processor",
         "ProcessorObject",
+        "InMemoryArtifactStore",
+        "InMemoryPipelineStore",
+        "LocalArtifactStore",
+        "PipelineRunResult",
+        "ProcessorRunResult",
+        "ProcessorRunStatus",
+        "TEXTIFY_PROCESSOR_VERSION",
+        "TRANSLATE_PROCESSOR_VERSION",
+        "TextifyProcessor",
+        "TranslateProcessor",
         "TextifyProcessStatus",
         "TranslateProcessStatus",
+        "run_artifact_through",
+        "run_processor_once",
+        "run_stage",
     ]
 
 

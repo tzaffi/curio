@@ -629,13 +629,30 @@ and a new dossier snapshot before evaluation is retried.
 
 ## Artifact Persistence
 
-Each preparation processor owns a Google Drive folder with the same name as its
-processor tab:
+Each in-scope preparation processor owns an artifact folder with the same name
+as its processor tab. The initial implementation uses a local filesystem
+`ArtifactStore`; Google Drive remains an adapter behind the same boundary for a
+later pass. Curio must not hard-code a machine-specific artifact location.
+Runtime config must provide the upstream iMsgX downloads directory:
+
+```json
+{
+  "pipeline": {
+    "downloads_dir": "~/Desktop/iMsgX/downloads",
+    "artifact_root": null
+  }
+}
+```
+
+`downloads_dir` is required. `artifact_root` is optional. When `artifact_root`
+is omitted or null, the effective artifact root is `downloads_dir.parent`, so
+Curio writes sibling directories beside iMsgX `downloads`. `~` expands through
+the host environment, and relative paths resolve relative to the config file
+directory.
 
 ```text
 textifications/
 translations/
-dossiers/
 ```
 
 Each object-creating preparation row creates one JSON object in the relevant
@@ -643,11 +660,11 @@ folder:
 
 - textify response JSON
 - translation response JSON
-- dossier snapshot JSON
 
 Persist the JSON object before appending the processor row. The row's `Object`
-cell links to that Google Drive object. Skipped and failed preparation rows do
-not create or link Drive objects.
+cell links to that object, either by local path or Drive URL depending on the
+artifact store. Skipped and failed preparation rows do not create or link
+artifact objects.
 
 Every persisted artifact should include a small lineage envelope
 with `source_ref`, `iMsgX`, `source`, processor `stage`, `ledger_tab`, and
@@ -682,13 +699,24 @@ run evaluate
 repeat until limit or no work
 ```
 
+The initial implemented scheduler is limited to:
+
+```text
+downloads candidate
+  -> textify
+  -> translate
+```
+
+It rejects unsupported stages such as `dossier` and `evaluate` until those
+processors are intentionally added.
+
 Single-stage commands should also exist for repair and backfill:
 
 ```text
 curio pipeline run-stage textify --limit 10
 curio pipeline run-stage translate --limit 10
-curio pipeline run-stage dossier --limit 10
-curio pipeline run-stage evaluate --limit 10
+curio pipeline run-stage dossier --limit 10  # later
+curio pipeline run-stage evaluate --limit 10  # later
 ```
 
 ## CLI Shape

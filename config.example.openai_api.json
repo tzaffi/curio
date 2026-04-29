@@ -2,6 +2,10 @@
   "translate": {
     "llm_caller": "translator_openai_gpt_54_mini_cold"
   },
+  "pipeline": {
+    "downloads_dir": "~/Desktop/iMsgX/downloads",
+    "artifact_root": null
+  },
   "llm_callers": {
     "translator_openai_gpt_54_mini_cold": {
       "provider": "openai_api",

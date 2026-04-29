@@ -2,6 +2,10 @@
   "textify": {
     "llm_caller": "textifier_google_document_ai_layout"
   },
+  "pipeline": {
+    "downloads_dir": "~/Desktop/iMsgX/downloads",
+    "artifact_root": null
+  },
   "llm_callers": {
     "textifier_google_document_ai_layout": {
       "provider": "google_document_ai",

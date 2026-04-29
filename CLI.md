@@ -246,8 +246,8 @@ Reserved stages:
 
 - `textify`
 - `translate`
-- `dossier`
-- `evaluate`
+- `dossier` (later; punted from current implementation pass)
+- `evaluate` (later; punted from current implementation pass)
 
 V1 pipeline commands are synchronous. They should append compact rows to
 processor-owned tabs, persist artifacts through the configured artifact store,

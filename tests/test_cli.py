@@ -236,6 +236,7 @@ def test_root_without_subcommand_shows_help() -> None:
     assert "Semantic labeling of iMsgX artifacts" in result.output
     assert "textify" in result.output
     assert "translate" in result.output
+    assert "pipeline" in result.output
     assert "curate" in result.output
     assert "bootstrap" in result.output
     assert "schema" in result.output
@@ -248,6 +249,7 @@ def test_root_help_shows_reserved_commands() -> None:
     assert result.exit_code == 0
     assert "textify" in result.output
     assert "translate" in result.output
+    assert "pipeline" in result.output
     assert "curate" in result.output
     assert "bootstrap" in result.output
     assert "schema" in result.output
@@ -260,6 +262,29 @@ def test_reserved_commands_report_stub_status() -> None:
 
         assert result.exit_code == 1
         assert f"{command} is reserved but not implemented yet." in result.output
+
+
+def test_pipeline_without_subcommand_shows_help() -> None:
+    result = runner.invoke(app, ["pipeline"])
+
+    assert result.exit_code == 0
+    assert "Run the processor-led Curio pipeline." in result.output
+    assert "run-stage" in result.output
+    assert "run-source" in result.output
+
+
+def test_pipeline_reserved_commands_report_stub_status() -> None:
+    commands = (
+        ("run",),
+        ("run-stage", "textify"),
+        ("run-source", "x://post/123"),
+        ("doctor",),
+    )
+    for command in commands:
+        result = runner.invoke(app, ["pipeline", *command])
+
+        assert result.exit_code == 1
+        assert f"pipeline {command[0]} is reserved but not implemented yet." in result.output
 
 
 def test_cli_build_llm_caller_client_delegates_to_llm_factory(monkeypatch: pytest.MonkeyPatch) -> None:

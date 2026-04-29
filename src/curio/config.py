@@ -85,8 +85,25 @@ class TextifyConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class PipelineConfig:
+    downloads_dir: Path
+    artifact_root: Path | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.downloads_dir, Path):
+            raise ConfigError("config.json must define 'pipeline.downloads_dir' as a Path")
+        if self.artifact_root is not None and not isinstance(self.artifact_root, Path):
+            raise ConfigError("config.json must define 'pipeline.artifact_root' as a Path or null")
+
+    @property
+    def effective_artifact_root(self) -> Path:
+        return self.downloads_dir.parent if self.artifact_root is None else self.artifact_root
+
+
+@dataclass(frozen=True, slots=True)
 class CurioConfig:
     llm_callers: Mapping[str, LlmCallerConfig]
+    pipeline_config: PipelineConfig
     translate_config: TranslateConfig = field(default_factory=TranslateConfig)
     textify_config: TextifyConfig = field(default_factory=TextifyConfig)
 
@@ -95,6 +112,8 @@ class CurioConfig:
             raise ConfigError("config.json must define 'translate' as a TranslateConfig")
         if not isinstance(self.textify_config, TextifyConfig):
             raise ConfigError("config.json must define 'textify' as a TextifyConfig")
+        if not isinstance(self.pipeline_config, PipelineConfig):
+            raise ConfigError("config.json must define 'pipeline' as a PipelineConfig")
         if (
             self.translate_config.llm_caller is not None
             and self.translate_config.llm_caller not in self.llm_callers
@@ -115,7 +134,7 @@ def config_path() -> Path:
 
 
 def load_config(path: Path | None = None) -> CurioConfig:
-    data = _load_config_data(path)
+    data, config_dir = _load_config_data(path)
     callers_data = _require_mapping(data.get("llm_callers"), "llm_callers")
     llm_callers: dict[str, LlmCallerConfig] = {}
     for caller_key, caller_value in callers_data.items():
@@ -130,11 +149,14 @@ def load_config(path: Path | None = None) -> CurioConfig:
         llm_callers=llm_callers,
         translate_config=_parse_translate_config(data.get("translate")),
         textify_config=_parse_textify_config(data.get("textify")),
+        pipeline_config=_parse_pipeline_config(data.get("pipeline"), config_dir),
     )
 
 
-def _load_config_data(path: Path | None = None) -> JsonObject:
-    resolved_path = config_path() if path is None else path
+def _load_config_data(path: Path | None = None) -> tuple[JsonObject, Path]:
+    selected_path = config_path() if path is None else path
+    expanded_path = selected_path.expanduser()
+    resolved_path = expanded_path if expanded_path.is_absolute() else Path.cwd() / expanded_path
     if not resolved_path.exists():
         raise ConfigError(f"Missing config file at {resolved_path}")
     try:
@@ -143,7 +165,7 @@ def _load_config_data(path: Path | None = None) -> JsonObject:
         raise ConfigError(f"config.json must contain valid JSON: {exc.msg}") from exc
     if not isinstance(data, dict):
         raise ConfigError("config.json must contain a JSON object")
-    return data
+    return data, resolved_path.parent.resolve(strict=False)
 
 
 def _parse_llm_caller_config(name: str, data: Mapping[str, object]) -> LlmCallerConfig:
@@ -253,6 +275,27 @@ def _parse_textify_config(value: object) -> TextifyConfig:
     return TextifyConfig(
         llm_caller=_require_optional_string(data.get("llm_caller"), "textify.llm_caller"),
     )
+
+
+def _parse_pipeline_config(value: object, config_dir: Path) -> PipelineConfig:
+    data = _require_mapping(value, "pipeline")
+    return PipelineConfig(
+        downloads_dir=_resolve_config_path(
+            data.get("downloads_dir"),
+            "pipeline.downloads_dir",
+            config_dir,
+        ),
+        artifact_root=None
+        if data.get("artifact_root") is None
+        else _resolve_config_path(data.get("artifact_root"), "pipeline.artifact_root", config_dir),
+    )
+
+
+def _resolve_config_path(value: object, name: str, config_dir: Path) -> Path:
+    raw_path = Path(_require_string(value, name)).expanduser()
+    if raw_path.is_absolute():
+        return raw_path.resolve(strict=False)
+    return (config_dir / raw_path).resolve(strict=False)
 
 
 def _parse_codex_exec_config(data: Mapping[str, object], caller_path: str) -> CodexCliExecConfig:

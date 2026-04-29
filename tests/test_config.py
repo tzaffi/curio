@@ -8,6 +8,7 @@ from curio.config import (
     ConfigError,
     CurioConfig,
     LlmCallerPromptConfig,
+    PipelineConfig,
     TextifyConfig,
     TranslateConfig,
     load_config,
@@ -58,6 +59,10 @@ def test_checked_in_codex_example_config_parses() -> None:
 
     assert config.translate_config == TranslateConfig(llm_caller="translator_codex_gpt_54_mini")
     assert config.textify_config == TextifyConfig(llm_caller="textifier_codex_gpt_54_mini")
+    assert config.pipeline_config == PipelineConfig(
+        downloads_dir=(Path.home() / "Desktop/iMsgX/downloads").resolve(strict=False)
+    )
+    assert config.pipeline_config.effective_artifact_root == (Path.home() / "Desktop/iMsgX").resolve(strict=False)
     assert caller_config.provider == ProviderName.CODEX_CLI
     assert caller_config.model == "gpt-5.5"
     assert caller_config.timeout_seconds == 300
@@ -246,6 +251,102 @@ def test_load_config_parses_optional_translate_config(tmp_path: Path) -> None:
     assert config.textify_config == TextifyConfig()
 
 
+def test_load_config_parses_required_pipeline_config_and_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "settings"
+    config_dir.mkdir()
+    config_path = config_dir / "config.json"
+    payload = json.loads((repo_root() / "config.example.openai_api.json").read_text(encoding="utf-8"))
+    payload["pipeline"] = {
+        "downloads_dir": "relative-downloads",
+        "artifact_root": "../curio-artifacts",
+    }
+    write_config(config_path, payload)
+
+    config = load_config(config_path)
+
+    assert config.pipeline_config.downloads_dir == config_dir / "relative-downloads"
+    assert config.pipeline_config.artifact_root == tmp_path / "curio-artifacts"
+    assert config.pipeline_config.effective_artifact_root == tmp_path / "curio-artifacts"
+
+    payload["pipeline"] = {
+        "downloads_dir": str(tmp_path / "absolute-downloads"),
+        "artifact_root": str(tmp_path / "absolute-artifacts"),
+    }
+    write_config(config_path, payload)
+
+    config = load_config(config_path)
+
+    assert config.pipeline_config.downloads_dir == tmp_path / "absolute-downloads"
+    assert config.pipeline_config.artifact_root == tmp_path / "absolute-artifacts"
+
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    monkeypatch.setenv("HOME", str(home_dir))
+    payload["pipeline"] = {
+        "downloads_dir": "~/imsgx/downloads",
+        "artifact_root": "~/curio-artifacts",
+    }
+    write_config(config_path, payload)
+
+    config = load_config(config_path)
+
+    assert config.pipeline_config.downloads_dir == home_dir / "imsgx/downloads"
+    assert config.pipeline_config.artifact_root == home_dir / "curio-artifacts"
+
+
+def test_load_config_resolves_relative_config_path_from_current_directory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    config_path = nested / "curio.json"
+    payload = json.loads((repo_root() / "config.example.openai_api.json").read_text(encoding="utf-8"))
+    payload["pipeline"] = {"downloads_dir": "downloads", "artifact_root": None}
+    write_config(config_path, payload)
+    monkeypatch.chdir(tmp_path)
+
+    config = load_config(Path("nested/curio.json"))
+
+    assert config.pipeline_config.downloads_dir == nested / "downloads"
+    assert config.pipeline_config.effective_artifact_root == nested
+
+
+def test_load_config_rejects_invalid_pipeline_config(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    payload = json.loads((repo_root() / "config.example.codex_cli.json").read_text(encoding="utf-8"))
+
+    del payload["pipeline"]
+    write_config(config_path, payload)
+    with pytest.raises(ConfigError, match="pipeline"):
+        load_config(config_path)
+
+    payload["pipeline"] = "bad"
+    write_config(config_path, payload)
+    with pytest.raises(ConfigError, match="pipeline"):
+        load_config(config_path)
+
+    payload["pipeline"] = {"downloads_dir": "", "artifact_root": None}
+    write_config(config_path, payload)
+    with pytest.raises(ConfigError, match="pipeline.downloads_dir"):
+        load_config(config_path)
+
+    payload["pipeline"] = {"downloads_dir": "downloads", "artifact_root": 3}
+    write_config(config_path, payload)
+    with pytest.raises(ConfigError, match="pipeline.artifact_root"):
+        load_config(config_path)
+
+    with pytest.raises(ConfigError, match="PipelineConfig"):
+        CurioConfig(llm_callers={}, pipeline_config="bad")
+    with pytest.raises(ConfigError, match="pipeline.downloads_dir"):
+        PipelineConfig(downloads_dir="bad")  # type: ignore[arg-type]
+    with pytest.raises(ConfigError, match="pipeline.artifact_root"):
+        PipelineConfig(downloads_dir=tmp_path / "downloads", artifact_root="bad")  # type: ignore[arg-type]
+
+
 def test_load_config_accepts_omitted_llm_caller_pricing(tmp_path: Path) -> None:
     config_path = tmp_path / "config.json"
     payload = json.loads((repo_root() / "config.example.codex_cli.json").read_text(encoding="utf-8"))
@@ -277,7 +378,11 @@ def test_load_config_rejects_invalid_translate_config(tmp_path: Path) -> None:
         load_config(config_path)
 
     with pytest.raises(ConfigError, match="TranslateConfig"):
-        CurioConfig(llm_callers={}, translate_config="bad")
+        CurioConfig(
+            llm_callers={},
+            pipeline_config=PipelineConfig(downloads_dir=tmp_path / "downloads"),
+            translate_config="bad",
+        )
 
     payload = json.loads((repo_root() / "config.example.codex_cli.json").read_text(encoding="utf-8"))
     payload["textify"] = "bad"
@@ -296,7 +401,11 @@ def test_load_config_rejects_invalid_translate_config(tmp_path: Path) -> None:
         load_config(config_path)
 
     with pytest.raises(ConfigError, match="TextifyConfig"):
-        CurioConfig(llm_callers={}, textify_config="bad")
+        CurioConfig(
+            llm_callers={},
+            pipeline_config=PipelineConfig(downloads_dir=tmp_path / "downloads"),
+            textify_config="bad",
+        )
 
 
 def test_load_config_rejects_invalid_llm_caller_pricing(tmp_path: Path) -> None:

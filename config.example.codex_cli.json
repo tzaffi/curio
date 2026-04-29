@@ -5,6 +5,10 @@
   "textify": {
     "llm_caller": "textifier_codex_gpt_54_mini"
   },
+  "pipeline": {
+    "downloads_dir": "~/Desktop/iMsgX/downloads",
+    "artifact_root": null
+  },
   "llm_callers": {
     "translator_codex_gpt_55": {
       "provider": "codex_cli",

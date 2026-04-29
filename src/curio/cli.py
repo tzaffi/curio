@@ -43,6 +43,11 @@ app = typer.Typer(
     help="Semantic labeling of iMsgX artifacts in preparation for a knowledgebase.",
     invoke_without_command=True,
 )
+pipeline_app = typer.Typer(
+    help="Run the processor-led Curio pipeline.",
+    invoke_without_command=True,
+)
+app.add_typer(pipeline_app, name="pipeline")
 
 RAW_CLI_BLOCK_ID = 1
 RAW_CLI_BLOCK_NAME = "cli_text"
@@ -55,6 +60,13 @@ TEXTIFY_LLM_CALLER_REQUIRED_MESSAGE = (
 @app.callback()
 def main(ctx: typer.Context) -> None:
     """Curio CLI."""
+    if ctx.invoked_subcommand is None:
+        typer.echo(ctx.get_help())
+
+
+@pipeline_app.callback()
+def pipeline_main(ctx: typer.Context) -> None:
+    """Curio pipeline CLI."""
     if ctx.invoked_subcommand is None:
         typer.echo(ctx.get_help())
 
@@ -673,6 +685,32 @@ def textify(
 def curate() -> None:
     """Run the main Curio curation workflow."""
     _reserved("curate")
+
+
+@pipeline_app.command("run")
+def pipeline_run() -> None:
+    """Run textify and translate pipeline stages."""
+    _reserved("pipeline run")
+
+
+@pipeline_app.command("run-stage")
+def pipeline_run_stage(stage: Annotated[str, typer.Argument(help="Pipeline stage: textify or translate.")] = "") -> None:
+    """Run one pipeline stage."""
+    del stage
+    _reserved("pipeline run-stage")
+
+
+@pipeline_app.command("run-source")
+def pipeline_run_source(source: Annotated[str, typer.Argument(help="Source identity to process.")] = "") -> None:
+    """Run the pipeline for one source."""
+    del source
+    _reserved("pipeline run-source")
+
+
+@pipeline_app.command("doctor")
+def pipeline_doctor() -> None:
+    """Diagnose pipeline state."""
+    _reserved("pipeline doctor")
 
 
 @app.command("bootstrap")
