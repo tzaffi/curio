@@ -9,8 +9,12 @@
 Pipeline position:
 
 ```text
-download row -> artifact dossier extraction -> textify non-text media -> translate text blocks -> evaluate -> persist
+downloads row -> textify -> translate -> dossier -> evaluate
 ```
+
+`download` is upstream `iMsgX` work. `persist` is owned by each pipeline
+processor, not a separate terminal stage. The full pipeline contract is defined
+in [PIPELINE.md](PIPELINE.md).
 
 ## Public Module
 
@@ -43,6 +47,28 @@ response assembly. Provider-specific file handling stays in `curio.llm_caller`.
 
 Textified output is source-language text. Non-English or uncertain text must pass
 through `translate` afterward.
+
+## Pipeline Integration
+
+The standalone `TextifyService` returns a structured response and does not write
+files by itself.
+
+When used by `TextifyProcessor` in the Curio pipeline:
+
+- input candidates come from `downloads`
+- converted responses are persisted as one textification JSON object in the
+  `textifications/` Google Drive folder before the `textifications` row is
+  appended
+- suggested files are represented inside that JSON object
+- a converted row stores that Drive link in `Object`
+- every textification row and persisted artifact preserves the immediate source
+  ref and the root `iMsgX` row ref
+- an already-text row uses `Status = already_text` and leaves `Object` blank
+- unsupported or no-text media use `Status = unsupported` or `Status = no_text`
+  and leave `Object` blank
+
+Skipped text media should not create duplicate dossier evidence blocks. The
+downstream dossier snapshot should consume the passthrough ref instead.
 
 ## Contracts
 
@@ -79,8 +105,9 @@ Rules:
 - preserve implied relative directories only when visible or strongly implied
 - reject unsafe paths: absolute paths, `..`, home expansion, drive roots, empty parts, and backslashes
 
-Suggested paths are metadata. Curio does not write them unless a later explicit
-command does so.
+Suggested paths are metadata at the standalone service boundary. Pipeline
+processors persist them inside the created textification JSON object when
+recording a completed textification.
 
 ## Deterministic Text Detection
 

@@ -27,8 +27,9 @@ This document is not the place to define:
 - provider adapter behavior
 - external provider pricing
 - downstream evaluation policy
+- pipeline processor scheduling
 
-Those belong in [SCHEMA.md](SCHEMA.md), [JSON-PAYLOAD.md](JSON-PAYLOAD.md), [LLM-CALLER.md](LLM-CALLER.md), and prompt files.
+Those belong in [PIPELINE.md](PIPELINE.md), [SCHEMA.md](SCHEMA.md), [JSON-PAYLOAD.md](JSON-PAYLOAD.md), [LLM-CALLER.md](LLM-CALLER.md), and prompt files.
 
 ## Design Principles
 
@@ -45,6 +46,15 @@ The v1 translation workflow should follow these rules:
 - Translation depends on `curio.llm_caller` for LLM execution.
 - Translation code should be provider-neutral and testable with a fake `LlmClient`.
 - `dossier_snapshot.evidence_text` remains an ordered list, not a keyed object.
+
+Pipeline position:
+
+```text
+downloads row -> textify -> translate -> dossier -> evaluate
+```
+
+`TranslateProcessor` consumes the selected textification output or passthrough
+text ref, then exposes the English text ref consumed by dossier assembly.
 
 ## Module Boundary
 
@@ -333,7 +343,18 @@ For each standalone translation request, Curio must:
 
 V1 should send all blocks for one artifact or dossier in one LLM request. Raw CLI text is represented as a single-block request. Curio must not batch unrelated artifacts together in one translation request. If a same-artifact request is too large for the selected provider, Curio should fail clearly rather than silently splitting the request.
 
-For each dossier text block during Curio evaluation, Curio must:
+When used by `TranslateProcessor` in the Curio pipeline:
+
+- input candidates come from completed textification outputs or passthrough refs
+- translated responses are persisted as one translation JSON object in the
+  `translations/` Google Drive folder before the `translations` row is appended
+- if translation is required, the row stores that Drive link in `Object`
+- every translation row and persisted artifact preserves the immediate source
+  ref and the root `iMsgX` row ref
+- if all relevant blocks are confidently English, the row records
+  `Status = already_english` and leaves `Object` blank
+
+For each source text block during dossier assembly, Curio must:
 
 1. assemble the normalized source-language text block
 2. detect the block language through translation

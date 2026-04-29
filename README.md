@@ -4,6 +4,7 @@ semantic labeling of iMsgX artifacts in preparation for a knowledgebase
 ## Specs
 
 - [SCHEMA.md](SCHEMA.md) defines the Google Sheets workbook shape.
+- [PIPELINE.md](PIPELINE.md) defines the processor-led Curio pipeline and intermediate ledgers.
 - [JSON-PAYLOAD.md](JSON-PAYLOAD.md) defines the persisted Drive JSON payload.
 - [TRANSLATE.md](TRANSLATE.md) defines the translation workflow, standalone translate interface, and dossier translation representation.
 - [TEXTIFY.md](TEXTIFY.md) defines the media-to-text workflow that runs before translation.

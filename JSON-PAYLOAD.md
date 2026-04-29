@@ -24,8 +24,9 @@ This document is not the place to define:
 - prompt wording
 - the exact label-registry contents
 - the exact artifact-key derivation algorithm
+- pipeline processor scheduling
 
-Those belong in [SCHEMA.md](/Users/zeph/github/tzaffi/curio/SCHEMA.md), [TRANSLATE.md](/Users/zeph/github/tzaffi/curio/TRANSLATE.md), [LLM-CALLER.md](/Users/zeph/github/tzaffi/curio/LLM-CALLER.md), [CLI.md](/Users/zeph/github/tzaffi/curio/CLI.md), registry files, prompt files, and future ADRs.
+Those belong in [PIPELINE.md](/Users/zeph/github/tzaffi/curio/PIPELINE.md), [SCHEMA.md](/Users/zeph/github/tzaffi/curio/SCHEMA.md), [TRANSLATE.md](/Users/zeph/github/tzaffi/curio/TRANSLATE.md), [LLM-CALLER.md](/Users/zeph/github/tzaffi/curio/LLM-CALLER.md), [CLI.md](/Users/zeph/github/tzaffi/curio/CLI.md), registry files, prompt files, and future ADRs.
 
 ## Design Principles
 
@@ -37,6 +38,9 @@ The v1 payload should follow these rules:
 - Python must not rewrite the meaning of an accepted `evaluation` object after generation.
 - `download_row` preserves the exact `iMsgX` downloads-sheet header names.
 - `dossier_snapshot` preserves the exact normalized evidence shown to the model, not the raw artifact by itself.
+- In pipeline runs, the dossier snapshot is assembled and persisted before evaluation.
+- The evaluation payload embeds the exact dossier snapshot object even when the
+  `evaluations` ledger also links back to the `dossiers` row or artifact.
 - If text shown to the model was truncated, the payload must say so explicitly.
 - If Curio textified non-text media, the extracted source-language text must appear in `dossier_snapshot.evidence_text` before translation.
 - If Curio translated non-English source text for evaluation, the translated English text must appear in `dossier_snapshot.evidence_text` as model-visible input.
@@ -74,6 +78,17 @@ Top-level fields:
 - `evaluation`
   The exact accepted model output after validation.
 
+Pipeline linkage:
+
+- The payload embeds `dossier_snapshot` for audit portability.
+- The `evaluations` sheet row should also record the `dossiers` row and/or
+  dossier `Object` for operational traceability.
+- The root upstream row ref is embedded in `artifact.download_row`; the
+  `download_row.iMsgX` value should be the operator-facing Google Sheets row URL
+  when available.
+- Pipeline artifacts outside this evaluation-payload schema should carry both
+  `source_ref` and `iMsgX` as defined in [PIPELINE.md](/Users/zeph/github/tzaffi/curio/PIPELINE.md).
+
 ## `artifact`
 
 `artifact` is Python-owned deterministic metadata.
@@ -89,6 +104,8 @@ Required fields:
   - `Column`
   - `Type`
   - `Object`
+  The `iMsgX` field should identify the exact Google Sheets row for the upstream
+  `downloads` entry when the run is backed by iMsgX/Google Sheets.
 - `local_artifact`
   Local file metadata for the artifact Curio actually processed. This may be `null` only if no local artifact file exists and Curio categorized directly from non-file evidence.
 
@@ -116,7 +133,7 @@ It is not:
 It is:
 
 - the compact typed input assembled before model evaluation
-- after deterministic extraction and cleanup
+- after deterministic extraction, textification, translation, and cleanup
 - with explicit truncation metadata whenever Curio shortened long text
 - including paired English translation blocks when translation was part of dossier preparation, as defined in [TRANSLATE.md](/Users/zeph/github/tzaffi/curio/TRANSLATE.md)
 - including textified source-language blocks when media textification was part of dossier preparation, as defined in [TEXTIFY.md](/Users/zeph/github/tzaffi/curio/TEXTIFY.md)
