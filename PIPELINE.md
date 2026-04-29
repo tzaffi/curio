@@ -85,10 +85,19 @@ assembled after textify and translation outputs exist.
 
 A processor is one pipeline stage with one owned output tab.
 
-The target Python protocol should be close to:
+The initial implementation is intentionally limited to the two built processors:
+
+- `textify`
+- `translate`
+
+`dossier` and `evaluate` remain normative v1 stages, but their processor
+classes, statuses, scheduler integration, and adapters are deferred until those
+capabilities exist behind service boundaries.
+
+The target Python processor contract should be an abstract base class close to:
 
 ```python
-class Processor(Protocol):
+class Processor(ABC):
     stage: str
     ledger_tab: str
     version: str
@@ -109,6 +118,12 @@ class Processor(Protocol):
         store: PipelineStore,
     ) -> ProcessRecord: ...
 ```
+
+An abstract base class is preferred over a processor `Protocol` because
+processors will likely share lifecycle checks and scheduler helpers as the
+pipeline grows. Store boundaries should remain protocols because local,
+in-memory, Google Sheets, and Google Drive adapters should stay duck-typed and
+easy to fake in tests.
 
 Method names are intentional:
 
@@ -184,6 +199,10 @@ The invariant applies to:
 - `ProcessRecord`
 - persisted processor JSON objects
 
+Python dataclasses should use the field name `imsgx` and serialize it as the
+JSON/object key `iMsgX`. This keeps Python naming conventional while preserving
+the visible sheet and spec vocabulary.
+
 Visible row `Source` and outcome `output_source` are different concepts:
 
 - Visible row `Source` is the immediate row or ref that this processor consumed.
@@ -247,7 +266,7 @@ The typed input to a processor.
 Recommended fields:
 
 - `source_ref`
-- `iMsgX`
+- `imsgx` serialized as `iMsgX`
 - `source`
 - `artifact_key`
 - `metadata`
