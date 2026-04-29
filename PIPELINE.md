@@ -22,10 +22,11 @@ This document is not the place to define:
 - detailed evaluation prompt policy
 - provider-specific LLM calling behavior
 - exact Google API transport mechanics
+- V2 Google API consolidation and runtime design
 
 Those belong in [TEXTIFY.md](TEXTIFY.md), [TRANSLATE.md](TRANSLATE.md),
 [JSON-PAYLOAD.md](JSON-PAYLOAD.md), [LLM-CALLER.md](LLM-CALLER.md),
-[SCHEMA.md](SCHEMA.md), and prompt files.
+[SCHEMA.md](SCHEMA.md), [V2-PLAN.md](V2-PLAN.md), and prompt files.
 
 ## Pipeline Order
 
@@ -78,8 +79,9 @@ assembled after textify and translation outputs exist.
 - Evaluation consumes a dossier produced by the dossier stage, not loose
   intermediate rows.
 - V1 is synchronous and single-process.
-- V2 may add leases, concurrency, and stronger storage backends without
-  changing processor contracts radically.
+- V2 may add shared Google API plumbing, leases, concurrency, and stronger
+  storage backends without changing processor contracts radically. Future work
+  is tracked in [V2-PLAN.md](V2-PLAN.md).
 
 ## Processor Contract
 
@@ -661,6 +663,34 @@ When `artifact_root` is omitted or null, the effective artifact root is
 `downloads`. `~` expands through the host environment, and relative paths
 resolve relative to the config file directory.
 
+## Google Sheets Store Implementation
+
+The v1 Google Sheets-backed `PipelineStore` should echo iMsgX's Google API
+implementation choices while keeping Curio's processor semantics separate.
+Curio should not import iMsgX internals directly. Implement the Curio store as a
+local call site first, then extract shared Google helpers only after both
+projects have real usage and tests.
+
+Required implementation choices:
+
+- use direct Google REST calls rather than `gspread` or `googleapiclient`
+- use OAuth desktop-app authorization
+- store authorized-user credentials in macOS Keychain
+- validate that stored credentials cover the required scopes before reuse
+- refresh expired credentials and write refreshed credentials back to Keychain
+- validate exact sheet headers before reading or appending rows
+- append rows with `valueInputOption=RAW`
+- read spreadsheet metadata, including sheet gid values, so row refs can link to
+  exact Google Sheets rows
+- use fake HTTP transports in unit tests; default `make check` must not require
+  live Google auth, network, Sheets, or Drive
+- make real CLI commands use configured Google Sheets and fail clearly when
+  config, auth, scope, or sheet access is missing
+
+The shared extraction target is documented in [V2-PLAN.md](V2-PLAN.md). The
+important v1 rule is behavioral compatibility with iMsgX's operational Google
+API choices, not a dependency from Curio to iMsgX.
+
 ```text
 textifications/
 translations/
@@ -841,18 +871,13 @@ V1 does not need exponential backoff queues or leases.
 
 ## V2 Design Space
 
-V2 may add:
+V2 runtime and Google API consolidation work is tracked in
+[V2-PLAN.md](V2-PLAN.md).
 
-- bounded worker pools
-- per-stage concurrency
-- per-provider LLM rate limits
-- claim rows or leases
-- stale lease recovery
-- retry queues
-- backpressure when downstream stages fail
-- alternative ledgers beyond Google Sheets
-
-Those features are out of scope for v1.
+Those features are out of scope for v1. In particular, v1 should not block on
+extracting shared Google helpers from iMsgX. Curio should first implement its
+own Google Sheets-backed store using the same operational semantics, then
+extract shared code once both projects provide real call sites.
 
 ## Testing Requirements
 

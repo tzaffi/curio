@@ -407,10 +407,12 @@ curio pipeline doctor --source <Source>
 
 ## V2 Notes
 
-Do not implement these in v1, but preserve design space:
+Do not implement V2 work in this `textify` / `translate` pass. Preserve design
+space in [V2-PLAN.md](V2-PLAN.md), including:
 
-- bounded worker pools
-- per-stage rate limits
+- shared Google API plumbing with iMsgX
+- Google Drive artifact adapter extraction candidates
+- bounded worker pools and per-stage rate limits
 - per-provider LLM concurrency limits
 - leases or claim rows
 - stale lease recovery
@@ -520,6 +522,18 @@ Current implementation state:
 - Extend required pipeline config with the spreadsheet/workbook identity and
   tab names needed to read `iMsgX`, read `downloads`, and append Curio-owned
   processor rows.
+- Mirror iMsgX's Google API operating choices in Curio's own store before any
+  shared extraction:
+  - direct Google REST calls, not `gspread` or `googleapiclient`
+  - OAuth desktop-app authorization
+  - macOS Keychain authorized-user credential storage
+  - scope-aware credential reuse and refresh
+  - exact sheet header validation
+  - append-only row writes with `valueInputOption=RAW`
+  - spreadsheet metadata lookup for sheet gid / exact row URLs
+- Do not land partial config/schema exports for the Google Sheets store before
+  the store, fake-client tests, and CLI failure modes are implemented together;
+  the previous half-step broke default config validation and reduced coverage.
 - Read the upstream `iMsgX` and `downloads` tabs needed to construct
   `ProcessCandidate` objects.
 - Do not mutate `iMsgX` or `downloads`.
