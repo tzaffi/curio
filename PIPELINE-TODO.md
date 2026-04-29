@@ -425,8 +425,10 @@ Implementation scope until explicitly widened:
 
 - Build only `textify` and `translate` pipeline infrastructure.
 - Keep `download` as upstream input, not a Curio processor.
-- Do not implement `dossier`, `evaluate`, `catalog`, Google Sheets/Drive live
+- Do not implement `dossier`, `evaluate`, `catalog`, Google Drive artifact
   adapters, or live pipeline smoke tests during this pass.
+- Implement the real pipeline store against configured Google Sheets. Do not
+  make real CLI commands silently substitute local files or fake stores.
 - Keep this file named `PIPELINE-TODO.md` and tracked by git. Do not move it
   back to a `TODO-*.md` name ignored by the repository.
 - When a checkpoint still names out-of-scope future work, the skipped sub-step
@@ -440,7 +442,8 @@ Current implementation state:
   artifact persistence exist for `textify` and `translate`.
 - The `curio pipeline` command group is reserved and exposes the intended
   operator controls, but it does not execute processors yet.
-- Candidate selection from real `iMsgX` / `downloads` data is not implemented.
+- Candidate selection from configured Google Sheets `iMsgX` / `downloads` data
+  is not implemented.
 - Non-persisting preview output is specified but not implemented.
 - CLI-level integration tests are still missing meaningful execution coverage.
 
@@ -511,11 +514,13 @@ Current implementation state:
 - ~~Add Google Drive artifact adapter behind `ArtifactStore`.~~ (PUNTED)
 - [test] Gate: `make check`, 100% coverage passed.
 
-[lock] [ ] **Checkpoint 5B: Read-only candidate store**
+[lock] [ ] **Checkpoint 5B: Google Sheets pipeline store**
 
-- Add a real candidate store behind `PipelineStore` for local/offline pipeline
-  execution.
-- Read the upstream `iMsgX` and `downloads` data needed to construct
+- Add a real Google Sheets-backed store behind `PipelineStore`.
+- Extend required pipeline config with the spreadsheet/workbook identity and
+  tab names needed to read `iMsgX`, read `downloads`, and append Curio-owned
+  processor rows.
+- Read the upstream `iMsgX` and `downloads` tabs needed to construct
   `ProcessCandidate` objects.
 - Do not mutate `iMsgX` or `downloads`.
 - Select `textify` candidates from `downloads` rows in deterministic row order.
@@ -523,6 +528,8 @@ Current implementation state:
   `downloads` order.
 - Implement idempotency checks against existing `textifications` and
   `translations` rows.
+- Support appending only to Curio-owned `textifications` and `translations`
+  tabs; row placement is always first available row.
 - Support selectors over upstream input rows and source identity:
   - `--row`
   - `--from-row`
@@ -532,9 +539,10 @@ Current implementation state:
   - `--end`
 - Treat row selectors only as upstream input filters. They must never select
   output row positions.
-- Keep Google Sheets out of default tests. Use local files, fake stores, or
-  checked-in fixtures.
-- ~~Add Google Sheets adapter behind `PipelineStore`.~~ (PUNTED)
+- Unit tests must not touch live Google Sheets. Use fake Google Sheets
+  transports/clients for non-integration tests.
+- Real CLI commands must use the configured Google Sheets store and must fail
+  clearly when config/auth/sheet access is missing.
 - [test] Gate: `make check`, 100% coverage passed.
 
 [lock] [x] **Checkpoint 6A: Reserved CLI surface**
@@ -596,7 +604,7 @@ Current implementation state:
 - Implement `curio pipeline run-stage textify --persist`.
 - Implement `curio pipeline run-stage translate --persist`.
 - Parse config and construct:
-  - read-only candidate store
+  - Google Sheets pipeline store
   - local artifact store
   - selected processor
   - existing service boundary and configured LLM caller
@@ -606,6 +614,8 @@ Current implementation state:
 - Append processor rows to the first available row in the processor-owned tab.
 - Never use CLI row options as output row positions.
 - Stop at the requested limit or first unrecoverable runtime failure.
+- Real commands must not use fake stores, fake services, or offline fixture
+  substitutes. Fakes belong only in tests.
 - [test] Gate: `make check`, 100% coverage passed.
 
 [lock] [ ] **Checkpoint 6D: Executable full `run`**
@@ -643,17 +653,19 @@ Current implementation state:
 - This does not yet prove the real CLI can run the pipeline.
 - [test] Gate: `make check`, 100% coverage passed.
 
-[lock] [ ] **Checkpoint 7B: End-to-end offline CLI integration**
+[lock] [ ] **Checkpoint 7B: CLI integration coverage**
 
-- Build local/offline fixtures for the real CLI path using the existing
-  `textify` smoke fixture assets where possible.
+- Add CLI-level tests for the executable pipeline commands.
 - Invoke `curio pipeline run-stage textify` and `curio pipeline run-stage
   translate` through the CLI runner.
 - Invoke `curio pipeline run` through the CLI runner once full current-scope
   execution exists.
-- Use fake LLM/service clients or dependency injection so no live providers are
-  called by default tests.
-- Verify persisted artifact files and appended local ledger rows.
+- Non-integration tests must not touch live Google Sheets, Google Drive, or live
+  providers. Use fake transports/clients at the boundary.
+- Real integration/smoke/e2e tests may touch Google Sheets only when explicitly
+  opted in.
+- Verify persisted local artifact files and appended processor rows through the
+  configured store boundary.
 - Verify previews print meaningful plans and persist nothing.
 - Verify `--persist` gates all mutating sweeps.
 - Verify no live Google Sheets or Drive adapters are touched by default tests.
@@ -680,7 +692,6 @@ of scope while this implementation pass is limited to `textify` and `translate`.
 - Add or specify `EvaluateProcessor`.
 - Wrap an evaluation service if one exists.
 - Implement or defer evaluation service explicitly if one does not exist.
-- Add Google Sheets adapter behind `PipelineStore`.
 - Add Google Drive artifact adapter behind `ArtifactStore`.
 - Support unsupported media skipping evaluation.
 - Verify evaluation consumes the dossier snapshot, not stale intermediate text.

@@ -166,8 +166,11 @@ The implementation should introduce at least two storage boundaries:
   - returns stable artifact refs, URLs, paths, hashes, sizes, and MIME types
 
 Google Sheets and Google Drive are v1 adapter implementations, not the processor
-contract itself. Tests should use in-memory stores and temp-dir artifact stores
-before any Google adapter exists.
+contract itself. Real pipeline commands should use the configured Google
+Sheets-backed store and fail clearly when configuration, auth, or sheet access
+is missing. Tests should still use in-memory stores, temp-dir artifact stores,
+or fake Google transports unless they are explicitly opt-in integration,
+smoke, or e2e tests.
 
 ## Core Data Concepts
 
@@ -633,22 +636,30 @@ Each in-scope preparation processor owns an artifact folder with the same name
 as its processor tab. The initial implementation uses a local filesystem
 `ArtifactStore`; Google Drive remains an adapter behind the same boundary for a
 later pass. Curio must not hard-code a machine-specific artifact location.
-Runtime config must provide the upstream iMsgX downloads directory:
+Runtime config must provide the upstream iMsgX downloads directory and the
+Google Sheets workbook used as the operational ledger:
 
 ```json
 {
   "pipeline": {
     "downloads_dir": "~/Desktop/iMsgX/downloads",
-    "artifact_root": null
+    "artifact_root": null,
+    "spreadsheet_id": "replace-with-google-sheets-id",
+    "tabs": {
+      "imsgx": "iMsgX",
+      "downloads": "downloads",
+      "textifications": "textifications",
+      "translations": "translations"
+    }
   }
 }
 ```
 
-`downloads_dir` is required. `artifact_root` is optional. When `artifact_root`
-is omitted or null, the effective artifact root is `downloads_dir.parent`, so
-Curio writes sibling directories beside iMsgX `downloads`. `~` expands through
-the host environment, and relative paths resolve relative to the config file
-directory.
+`downloads_dir` and `spreadsheet_id` are required. `artifact_root` is optional.
+When `artifact_root` is omitted or null, the effective artifact root is
+`downloads_dir.parent`, so Curio writes sibling directories beside iMsgX
+`downloads`. `~` expands through the host environment, and relative paths
+resolve relative to the config file directory.
 
 ```text
 textifications/
@@ -845,7 +856,10 @@ Those features are out of scope for v1.
 
 ## Testing Requirements
 
-Pipeline implementation must be test-first and offline by default.
+Pipeline implementation must be test-first. Default unit tests and default
+`make check` must not touch live Google Sheets, Google Drive, or live providers.
+Real CLI commands, however, must use the configured Google Sheets-backed store;
+they should not silently switch to local files or fake stores.
 
 Required tests:
 
@@ -858,7 +872,7 @@ Required tests:
 - in-memory artifact-through scheduler tests
 - single-stage scheduler tests
 - CLI persist-gate and preview tests
-- fake Google adapter tests before any live Google calls
+- fake Google transport tests before any live Google calls
 
 Default `make check` must not require:
 

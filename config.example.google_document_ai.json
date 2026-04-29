@@ -4,7 +4,14 @@
   },
   "pipeline": {
     "downloads_dir": "~/Desktop/iMsgX/downloads",
-    "artifact_root": null
+    "artifact_root": null,
+    "spreadsheet_id": "replace-with-google-sheets-id",
+    "tabs": {
+      "imsgx": "iMsgX",
+      "downloads": "downloads",
+      "textifications": "textifications",
+      "translations": "translations"
+    }
   },
   "llm_callers": {
     "textifier_google_document_ai_layout": {

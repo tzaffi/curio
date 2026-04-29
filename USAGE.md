@@ -23,6 +23,11 @@ Normal translation and textification commands use those configured
 defaults. Pass `--llm-caller NAME` only when you want to override the config or
 structured JSON request for one run.
 
+Pipeline commands also require explicit `pipeline` config. `downloads_dir`
+anchors local iMsgX artifacts, `artifact_root` controls Curio's local output
+folders when set, and `spreadsheet_id` plus `tabs` identify the Google Sheets
+ledger used by real pipeline runs.
+
 Each named caller owns its provider, model, auth config, timeout, and
 provider-specific tuning. Translator callers in the example configs also define
 `prompt` templates for model-specific translator instructions and user prompt

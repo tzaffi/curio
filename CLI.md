@@ -285,8 +285,9 @@ inside an explicit stage or diagnostic command. `pipeline doctor` is a
 non-mutating diagnostic command and may accept targeted selectors.
 
 Current implementation status: the option surface is reserved and visible in
-help. Actual pipeline execution remains blocked on a real downloads/local ledger
-input adapter, so commands fail clearly rather than touching live Google Sheets.
+help. Actual pipeline execution remains blocked on the Google Sheets-backed
+pipeline store, so commands fail clearly rather than touching live Google
+Sheets.
 
 ## `curate`
 
