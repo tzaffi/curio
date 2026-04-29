@@ -236,10 +236,9 @@ The `pipeline` command group is the processor-led Curio workflow defined in
 Reserved forms:
 
 ```text
-uv run python -m curio pipeline run [FLAGS]
-uv run python -m curio pipeline run-stage STAGE [FLAGS]
-uv run python -m curio pipeline run-source SOURCE [FLAGS]
-uv run python -m curio pipeline doctor [FLAGS]
+uv run python -m curio pipeline run [OPTIONS]
+uv run python -m curio pipeline run-stage STAGE [OPTIONS]
+uv run python -m curio pipeline doctor [OPTIONS]
 ```
 
 Reserved stages:
@@ -253,8 +252,41 @@ V1 pipeline commands are synchronous. They should append compact rows to
 processor-owned tabs, persist artifacts through the configured artifact store,
 and stop at the requested limit or first unrecoverable runtime failure.
 
-Detailed flags are intentionally left to [PIPELINE.md](PIPELINE.md) and the
-implementation checkpoint.
+Append-capable commands are intentionally narrow:
+
+- `--limit N`
+- `--persist`
+
+`pipeline run` and `pipeline run-stage STAGE` may append only for next-available
+limited sweeps. `--limit` defaults to `10`, so `pipeline run-stage textify
+--persist` means "append rows for the next 10 textify candidates." Without
+`--persist`, the same next-available sweep must fail rather than mutating
+implicitly.
+
+Targeted selectors are preview-only and must not be combined with `--persist`:
+
+- `--start DATE_OR_DATETIME`
+- `--end DATE_OR_DATETIME`
+- `--source SOURCE`
+- `--row N`
+- `--from-row N`
+- `--to-row N`
+- `--json`
+
+`--start` and `--end` are intended to filter upstream `downloads` rows by X Date
+using the same date-only and ISO datetime style as iMsgX. `--row`,
+`--from-row`, and `--to-row` refer only to upstream downloads input row
+numbers. They never select output row positions; processor tabs are append-only
+and write to the first available row.
+
+There is no source runner. `pipeline run` means the whole pipeline, and
+`pipeline run-stage` means one processor. Source selectors are only meaningful
+inside an explicit stage or diagnostic command. `pipeline doctor` is a
+non-mutating diagnostic command and may accept targeted selectors.
+
+Current implementation status: the option surface is reserved and visible in
+help. Actual pipeline execution remains blocked on a real downloads/local ledger
+input adapter, so commands fail clearly rather than touching live Google Sheets.
 
 ## `curate`
 

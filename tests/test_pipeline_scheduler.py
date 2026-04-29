@@ -477,6 +477,30 @@ def test_run_stage_records_failure_and_continues_to_unrelated_source() -> None:
     assert result.made_progress is True
 
 
+def test_run_stage_records_first_unhandled_candidates_in_input_order_up_to_limit() -> None:
+    first = make_candidate("x://post/1", 1)
+    second = make_candidate("x://post/2", 2)
+    third = make_candidate("x://post/3", 3)
+    fourth = make_candidate("x://post/4", 4)
+    existing_record = ProcessRecord(
+        stage=PipelineStage.TEXTIFY.value,
+        ledger_tab=LedgerTab.TEXTIFICATIONS.value,
+        version="processor-v1",
+        source_ref=first.source_ref,
+        imsgx=first.imsgx,
+        status=TextifyProcessStatus.CONVERTED.value,
+    )
+    store = InMemoryPipelineStore({PipelineStage.TEXTIFY.value: [first, second, third, fourth]})
+    store.append_record(existing_record)
+
+    result = run_stage(StageProcessor(), store=store, artifacts=InMemoryArtifactStore(), limit=2)
+
+    assert result.iterations == 2
+    assert [processor_result.candidate for processor_result in result.processor_results] == [second, third]
+    assert [record.source_ref.row_number for record in store.records] == [1, 2, 3]
+    assert fourth.source_ref.row_number not in [record.source_ref.row_number for record in store.records]
+
+
 def test_run_stage_stops_cleanly_on_no_work() -> None:
     result = run_stage(StageProcessor(), store=InMemoryPipelineStore(), artifacts=InMemoryArtifactStore(), limit=10)
 

@@ -270,21 +270,83 @@ def test_pipeline_without_subcommand_shows_help() -> None:
     assert result.exit_code == 0
     assert "Run the processor-led Curio pipeline." in result.output
     assert "run-stage" in result.output
-    assert "run-source" in result.output
+
+
+def test_pipeline_run_stage_help_exposes_persist_and_preview_controls() -> None:
+    result = runner.invoke(app, ["pipeline", "run-stage", "--help"])
+
+    assert result.exit_code == 0
+    assert "STAGE:{textify|translate}" in result.output
+    for option in (
+        "--limit",
+        "--persist",
+        "--start",
+        "--end",
+        "--source",
+        "--row",
+        "--from-row",
+        "--to-row",
+        "--json",
+    ):
+        assert option in result.output
+    for option in (
+        "--dry-run",
+        "--llm-caller",
+    ):
+        assert option not in result.output
 
 
 def test_pipeline_reserved_commands_report_stub_status() -> None:
     commands = (
-        ("run",),
-        ("run-stage", "textify"),
-        ("run-source", "x://post/123"),
-        ("doctor",),
+        ("run", "--limit", "2", "--persist"),
+        ("run", "--row", "7", "--json"),
+        ("run-stage", "textify", "--limit", "7", "--persist"),
+        ("run-stage", "textify", "--source", "x://post/123"),
+        ("doctor", "--from-row", "7", "--to-row", "9", "--json"),
     )
     for command in commands:
         result = runner.invoke(app, ["pipeline", *command])
 
         assert result.exit_code == 1
         assert f"pipeline {command[0]} is reserved but not implemented yet." in result.output
+
+
+def test_pipeline_next_available_sweeps_require_persist() -> None:
+    for command in (
+        ("run",),
+        ("run", "--limit", "5"),
+        ("run-stage", "textify"),
+        ("run-stage", "translate", "--limit", "5"),
+    ):
+        result = runner.invoke(app, ["pipeline", *command])
+
+        assert result.exit_code == 2
+        assert "requires --persist for next-available append sweeps" in result.output
+
+
+def test_pipeline_persist_rejects_targeted_selectors() -> None:
+    for command in (
+        ("run", "--persist", "--row", "7"),
+        ("run-stage", "textify", "--persist", "--source", "x://post/123"),
+        ("run-stage", "translate", "--persist", "--from-row", "7", "--to-row", "9"),
+    ):
+        result = runner.invoke(app, ["pipeline", *command])
+
+        assert result.exit_code == 2
+        assert "--persist cannot be combined with row, date, or source selectors" in result.output
+
+
+def test_pipeline_does_not_offer_source_runner_shortcuts() -> None:
+    run_help = runner.invoke(app, ["pipeline", "run", "--help"])
+    source_command = runner.invoke(app, ["pipeline", "run-source", "x://post/123"])
+    source_option = runner.invoke(app, ["pipeline", "run", "--source", "x://post/123"])
+
+    assert run_help.exit_code == 0
+    assert "--source" not in run_help.output
+    assert source_command.exit_code == 2
+    assert "No such command" in source_command.output
+    assert source_option.exit_code == 2
+    assert "No such option" in source_option.output
 
 
 def test_cli_build_llm_caller_client_delegates_to_llm_factory(monkeypatch: pytest.MonkeyPatch) -> None:

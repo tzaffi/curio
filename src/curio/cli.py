@@ -16,6 +16,7 @@ from curio.llm_caller import (
     SubprocessCodexCliRunner,
     build_llm_caller_client,
 )
+from curio.pipeline import PipelineStage
 from curio.schemas import SchemaValidationError
 from curio.textify import (
     DEFAULT_TEXTIFY_OUTPUT_FORMAT,
@@ -74,6 +75,30 @@ def pipeline_main(ctx: typer.Context) -> None:
 def _reserved(command: str) -> None:
     typer.echo(f"{command} is reserved but not implemented yet.", err=True)
     raise typer.Exit(1)
+
+
+def _has_pipeline_selector(
+    *,
+    start: str | None,
+    end: str | None,
+    source: str | None,
+    row: int | None,
+    from_row: int | None,
+    to_row: int | None,
+) -> bool:
+    return any(value is not None for value in (start, end, source, row, from_row, to_row))
+
+
+def _validate_pipeline_persist_mode(
+    *,
+    command: str,
+    persist: bool,
+    has_selector: bool,
+) -> None:
+    if persist and has_selector:
+        _fail_usage(f"{command} --persist cannot be combined with row, date, or source selectors")
+    if not persist and not has_selector:
+        _fail_usage(f"{command} requires --persist for next-available append sweeps")
 
 
 def _build_llm_caller_client(
@@ -688,27 +713,111 @@ def curate() -> None:
 
 
 @pipeline_app.command("run")
-def pipeline_run() -> None:
+def pipeline_run(
+    limit: Annotated[int, typer.Option("--limit", help="Maximum number of upstream downloads rows to process.")] = 10,
+    persist: Annotated[bool, typer.Option("--persist", help="Append rows and write artifacts for the next available work.")] = False,
+    start: Annotated[
+        str | None,
+        typer.Option("--start", help="Preview downloads with X Date at or after this date/time."),
+    ] = None,
+    end: Annotated[
+        str | None,
+        typer.Option("--end", help="Preview downloads with X Date before or at this date/time."),
+    ] = None,
+    row: Annotated[int | None, typer.Option("--row", help="Preview this upstream downloads input row number.")] = None,
+    from_row: Annotated[
+        int | None,
+        typer.Option("--from-row", help="Preview upstream downloads input rows at or after this row number."),
+    ] = None,
+    to_row: Annotated[
+        int | None,
+        typer.Option("--to-row", help="Preview upstream downloads input rows at or before this row number."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable preview JSON.")] = False,
+) -> None:
     """Run textify and translate pipeline stages."""
+    _validate_pipeline_persist_mode(
+        command="pipeline run",
+        persist=persist,
+        has_selector=_has_pipeline_selector(
+            start=start,
+            end=end,
+            source=None,
+            row=row,
+            from_row=from_row,
+            to_row=to_row,
+        ),
+    )
     _reserved("pipeline run")
 
 
 @pipeline_app.command("run-stage")
-def pipeline_run_stage(stage: Annotated[str, typer.Argument(help="Pipeline stage: textify or translate.")] = "") -> None:
+def pipeline_run_stage(
+    stage: Annotated[PipelineStage, typer.Argument(help="Pipeline stage to run.")],
+    limit: Annotated[int, typer.Option("--limit", help="Maximum number of stage candidates to process.")] = 10,
+    persist: Annotated[bool, typer.Option("--persist", help="Append rows and write artifacts for the next available work.")] = False,
+    start: Annotated[
+        str | None,
+        typer.Option("--start", help="Preview downloads with X Date at or after this date/time."),
+    ] = None,
+    end: Annotated[
+        str | None,
+        typer.Option("--end", help="Preview downloads with X Date before or at this date/time."),
+    ] = None,
+    source: Annotated[str | None, typer.Option("--source", help="Preview this source identity.")] = None,
+    row: Annotated[int | None, typer.Option("--row", help="Preview this upstream downloads input row number.")] = None,
+    from_row: Annotated[
+        int | None,
+        typer.Option("--from-row", help="Preview upstream downloads input rows at or after this row number."),
+    ] = None,
+    to_row: Annotated[
+        int | None,
+        typer.Option("--to-row", help="Preview upstream downloads input rows at or before this row number."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable preview JSON.")] = False,
+) -> None:
     """Run one pipeline stage."""
-    del stage
+    _validate_pipeline_persist_mode(
+        command=f"pipeline run-stage {stage.value}",
+        persist=persist,
+        has_selector=_has_pipeline_selector(
+            start=start,
+            end=end,
+            source=source,
+            row=row,
+            from_row=from_row,
+            to_row=to_row,
+        ),
+    )
     _reserved("pipeline run-stage")
 
 
-@pipeline_app.command("run-source")
-def pipeline_run_source(source: Annotated[str, typer.Argument(help="Source identity to process.")] = "") -> None:
-    """Run the pipeline for one source."""
-    del source
-    _reserved("pipeline run-source")
-
-
 @pipeline_app.command("doctor")
-def pipeline_doctor() -> None:
+def pipeline_doctor(
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Read Curio runtime config JSON. Defaults to ./config.json."),
+    ] = None,
+    start: Annotated[
+        str | None,
+        typer.Option("--start", help="Inspect downloads with X Date at or after this date/time."),
+    ] = None,
+    end: Annotated[
+        str | None,
+        typer.Option("--end", help="Inspect downloads with X Date before or at this date/time."),
+    ] = None,
+    source: Annotated[str | None, typer.Option("--source", help="Inspect this source identity.")] = None,
+    row: Annotated[int | None, typer.Option("--row", help="Inspect this upstream downloads input row number.")] = None,
+    from_row: Annotated[
+        int | None,
+        typer.Option("--from-row", help="Inspect upstream downloads input rows at or after this row number."),
+    ] = None,
+    to_row: Annotated[
+        int | None,
+        typer.Option("--to-row", help="Inspect upstream downloads input rows at or before this row number."),
+    ] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable diagnostics JSON.")] = False,
+) -> None:
     """Diagnose pipeline state."""
     _reserved("pipeline doctor")
 

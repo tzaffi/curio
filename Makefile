@@ -9,11 +9,25 @@ OPTS ?=
 TEXT ?=
 ARTIFACT ?=
 DOWNLOADS ?= $(HOME)/Desktop/iMsgX/downloads
+LIMIT ?= 10
+START ?=
+END ?=
+ROW ?=
+FROM_ROW ?=
+TO_ROW ?=
+SOURCE ?=
+STAGE ?= textify
+CONFIG ?=
+PERSIST ?=
+JSON ?=
 CURIO_TEXTIFY := cd "$(DOWNLOADS)" && $(UV) --project "$(CURDIR)" run python -m curio textify --config "$(CURDIR)/config.json"
+PIPELINE_RUN_ARGS = $(if $(strip $(LIMIT)),--limit "$(LIMIT)",) $(if $(filter 1 true yes,$(PERSIST)),--persist,) $(if $(strip $(START)),--start "$(START)",) $(if $(strip $(END)),--end "$(END)",) $(if $(strip $(ROW)),--row "$(ROW)",) $(if $(strip $(FROM_ROW)),--from-row "$(FROM_ROW)",) $(if $(strip $(TO_ROW)),--to-row "$(TO_ROW)",) $(if $(filter 1 true yes,$(JSON)),--json,)
+PIPELINE_STAGE_ARGS = $(if $(strip $(LIMIT)),--limit "$(LIMIT)",) $(if $(filter 1 true yes,$(PERSIST)),--persist,) $(if $(strip $(START)),--start "$(START)",) $(if $(strip $(END)),--end "$(END)",) $(if $(strip $(SOURCE)),--source "$(SOURCE)",) $(if $(strip $(ROW)),--row "$(ROW)",) $(if $(strip $(FROM_ROW)),--from-row "$(FROM_ROW)",) $(if $(strip $(TO_ROW)),--to-row "$(TO_ROW)",) $(if $(filter 1 true yes,$(JSON)),--json,)
+PIPELINE_INSPECT_ARGS = $(if $(strip $(CONFIG)),--config "$(CONFIG)",) $(if $(strip $(START)),--start "$(START)",) $(if $(strip $(END)),--end "$(END)",) $(if $(strip $(SOURCE)),--source "$(SOURCE)",) $(if $(strip $(ROW)),--row "$(ROW)",) $(if $(strip $(FROM_ROW)),--from-row "$(FROM_ROW)",) $(if $(strip $(TO_ROW)),--to-row "$(TO_ROW)",) $(if $(filter 1 true yes,$(JSON)),--json,)
 export TEXT
 export ARTIFACT
 
-.PHONY: help sync test translate-smoke translate-smoke-collect translate-smoke-evaluate translate-smoke-report textify-smoke textify-smoke-collect textify-smoke-evaluate textify-smoke-report lint lint-fix typecheck check curio cli-help translate translate-genius translate-help textify textify-genius textify-help build-wheel
+.PHONY: help sync test translate-smoke translate-smoke-collect translate-smoke-evaluate translate-smoke-report textify-smoke textify-smoke-collect textify-smoke-evaluate textify-smoke-report lint lint-fix typecheck check curio cli-help translate translate-genius translate-help textify textify-genius textify-help pipeline-help pipeline-run-help pipeline-run-stage-help pipeline-doctor-help pipeline-run pipeline-run-stage pipeline-doctor build-wheel
 
 help:
 	@printf '%s\n' \
@@ -39,6 +53,12 @@ help:
 		'make cli-help                 Show the Curio CLI help' \
 		'make translate-help           Show the curio translate help' \
 		'make textify-help             Show the curio textify help' \
+		'make pipeline-help            Show the curio pipeline help' \
+		'make pipeline-run-help        Show the curio pipeline run help' \
+		'make pipeline-run-stage-help  Show the curio pipeline run-stage help' \
+		'make pipeline-run             Append next LIMIT=10 artifact-through items with PERSIST=1; row/date selectors inspect only' \
+		'make pipeline-run-stage       Append next LIMIT=10 stage items with PERSIST=1; override STAGE=textify|translate; selectors inspect only' \
+		'make pipeline-doctor          Run pipeline diagnostics command surface; override input filters START=... END=... ROW=...' \
 		'make build-wheel              Build a wheel for local installation/testing'
 
 sync:
@@ -121,6 +141,27 @@ translate-help:
 
 textify-help:
 	$(CURIO) textify --help
+
+pipeline-help:
+	$(CURIO) pipeline --help
+
+pipeline-run-help:
+	$(CURIO) pipeline run --help
+
+pipeline-run-stage-help:
+	$(CURIO) pipeline run-stage --help
+
+pipeline-doctor-help:
+	$(CURIO) pipeline doctor --help
+
+pipeline-run:
+	$(CURIO) pipeline run $(PIPELINE_RUN_ARGS) $(OPTS)
+
+pipeline-run-stage:
+	$(CURIO) pipeline run-stage $(STAGE) $(PIPELINE_STAGE_ARGS) $(OPTS)
+
+pipeline-doctor:
+	$(CURIO) pipeline doctor $(PIPELINE_INSPECT_ARGS) $(OPTS)
 
 build-wheel:
 	$(UV) build --wheel

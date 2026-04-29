@@ -713,11 +713,53 @@ processors are intentionally added.
 Single-stage commands should also exist for repair and backfill:
 
 ```text
-curio pipeline run-stage textify --limit 10
-curio pipeline run-stage translate --limit 10
+curio pipeline run-stage textify
+curio pipeline run-stage translate --limit 25
 curio pipeline run-stage dossier --limit 10  # later
 curio pipeline run-stage evaluate --limit 10  # later
 ```
+
+### Candidate Selection
+
+Append-capable runs select work only by effective limit and require explicit
+`--persist`. The default limit is `10`, so `curio pipeline run-stage textify
+--persist` means:
+
+1. Read upstream candidates in deterministic ledger order.
+2. Ignore candidates already handled by the selected processor according to the
+   processor input identity and idempotency rules.
+3. Append compact rows for the first 10 remaining candidates, stopping early if
+   no candidate remains.
+
+For `textify`, deterministic ledger order is upstream `downloads` row order,
+ascending by row number when the adapter has row numbers. For `translate`, it is
+the order of eligible text outputs emitted by `textify`, preserving the root
+`downloads` order. Failures append compact `failed` rows and count toward the
+limit for that run; default sweeps then continue to unrelated candidates.
+
+Running a next-available sweep without `--persist` must fail before any provider
+call, artifact write, or row append. Targeted row/date/source filters are
+preview-only and must not be accepted with `--persist`.
+
+Output row placement is never selected by CLI options. Processor-owned tabs are
+append-only and the store adapter writes each new processor row to the first
+available row.
+
+### Preview Output
+
+There is no `--dry-run` flag. Non-persisting variants are created by using a
+targeted selector such as `--row`, `--source`, `--start`, `--end`, `--from-row`,
+or `--to-row` on `run-stage` or `doctor`. A preview prints the matching plan and
+persists nothing:
+
+- no processor rows are appended
+- no artifacts are written
+- no LLM or external processor calls are made
+- no Google Sheets or Drive mutations occur
+
+Human output should be a compact table with stage, upstream downloads row,
+source, immediate input ref, planned processor action, and reason. JSON output
+is valid only for non-mutating previews and diagnostics.
 
 ## CLI Shape
 
@@ -728,21 +770,35 @@ Likely commands:
 ```text
 curio pipeline run
 curio pipeline run-stage STAGE
-curio pipeline run-source SOURCE
-curio pipeline doctor SOURCE
+curio pipeline doctor
 ```
 
-Likely shared flags:
+Append-capable command flags:
 
-- `--config PATH`
 - `--limit N`
-- `--dry-run`
+- `--persist`
+
+Preview and inspection-only flags for non-mutating command variants:
+
+- `--start DATE_OR_DATETIME`
+- `--end DATE_OR_DATETIME`
 - `--json`
 - `--source SOURCE`
+- `--row N`
 - `--from-row N`
-- `--llm-caller NAME`
+- `--to-row N`
 
-`--llm-caller` should apply only to LLM-backed processors in the selected run.
+There is no `run-source` command and no `pipeline run --source` form. `run`
+means the whole pipeline, while `run-stage` means one explicit processor.
+
+`--start` and `--end` should mirror iMsgX date-window controls against upstream
+downloads `X Date` values. Row selectors should refer only to upstream downloads
+input row numbers. They must not target output rows; processor-owned tabs are
+append-only and write to the first available row.
+
+Mutating commands should use configured processor callers. Caller override flags
+are intentionally left out of append-capable pipeline commands until retry and
+operator controls are specified.
 
 The existing reserved `curate` command may later become an alias or user-facing
 wrapper for `pipeline run`, but the lower-level `pipeline` group should exist
@@ -801,7 +857,7 @@ Required tests:
 - artifact persistence/recovery tests
 - in-memory artifact-through scheduler tests
 - single-stage scheduler tests
-- CLI dry-run tests
+- CLI persist-gate and preview tests
 - fake Google adapter tests before any live Google calls
 
 Default `make check` must not require:

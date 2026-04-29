@@ -20,7 +20,7 @@ cp config.example.openai_api.json config.json
 Then edit `config.json`. The file contains named `llm_callers` and a
 `translate.llm_caller` default. Codex examples also include `textify.llm_caller`.
 Normal translation and textification commands use those configured
-default. Pass `--llm-caller NAME` only when you want to override the config or
+defaults. Pass `--llm-caller NAME` only when you want to override the config or
 structured JSON request for one run.
 
 Each named caller owns its provider, model, auth config, timeout, and
@@ -217,6 +217,105 @@ Textifier prompt templates may also use `{textify_request_json}`,
 `{source_manifest_json}`, `{preferred_output_format}`, and
 `{suggested_file_policy}`.
 Literal braces use normal Python escaping: `{{` and `}}`.
+
+## Command Examples
+
+Examples below use `uv run python -m curio`, which is equivalent to
+`uv run curio` when the console script is installed.
+
+Translate a literal string:
+
+```bash
+uv run python -m curio translate "bonjour"
+```
+
+Translate stdin:
+
+```bash
+printf '%s\n' '今日は新しいモデルを公開します。' | uv run python -m curio translate
+```
+
+Override the configured translator for one run and print structured JSON:
+
+```bash
+uv run python -m curio translate --llm-caller translator_codex_gpt_55 --json "bonjour"
+```
+
+Translate from and to local files:
+
+```bash
+uv run python -m curio translate --input-file note.txt --output translated.txt
+```
+
+Translate a structured request:
+
+```bash
+uv run python -m curio translate --input-json request.json --json
+```
+
+Use Make wrappers for the common translate paths:
+
+```bash
+make translate TEXT="bonjour"
+make translate TEXT="bonjour" OPTS="--json --stats"
+make translate-genius TEXT="bonjour"
+```
+
+Textify one local artifact:
+
+```bash
+uv run python -m curio textify --json screenshot.png
+```
+
+Textify an artifact from the iMsgX downloads directory:
+
+```bash
+make textify ARTIFACT="imsgx-r0057-x1-image-2039077799643005198-photo-1.png"
+make textify-genius ARTIFACT="imsgx-r0057-x1-image-2039077799643005198-photo-1.png"
+```
+
+Pipeline commands currently expose the intended operator controls but still
+return a reserved-command error until the real downloads/local ledger adapter is
+implemented. They are safe help/shape checks and do not touch live Google
+Sheets.
+
+Append-capable pipeline commands are deliberately narrow. A next-available sweep
+requires `--persist`; without it, Curio must fail before mutating anything. The
+only append selector is the effective `--limit`; processor tabs are append-only
+and write to the first available row.
+
+Append the next 10 textify candidates:
+
+```bash
+uv run python -m curio pipeline run-stage textify --persist
+make pipeline-run-stage STAGE=textify PERSIST=1
+```
+
+Append the next 25 translation candidates:
+
+```bash
+uv run python -m curio pipeline run-stage translate --limit 25 --persist
+make pipeline-run-stage STAGE=translate LIMIT=25 PERSIST=1
+```
+
+This next-available sweep refuses to run because it could append rows without
+the explicit mutation gate:
+
+```bash
+uv run python -m curio pipeline run-stage textify
+```
+
+Targeted row/date/source selectors are inspection-only. They do not append rows,
+persist artifacts, or call providers:
+
+```bash
+uv run python -m curio pipeline run-stage textify --row 25
+uv run python -m curio pipeline run-stage textify --source "x://post/123"
+uv run python -m curio pipeline doctor --from-row 10 --to-row 25 --json
+make pipeline-run-stage STAGE=textify ROW=25
+make pipeline-run-stage STAGE=textify SOURCE="x://post/123"
+make pipeline-doctor FROM_ROW=10 TO_ROW=25 JSON=1
+```
 
 ## Expected Fail-Fast Behavior
 
