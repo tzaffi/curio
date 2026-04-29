@@ -132,6 +132,11 @@ the root `iMsgX` row and a dossier snapshot artifact was persisted.
 found zero usable model-visible evidence blocks. A `no_evidence` row does not
 emit an `output_source` to evaluation.
 
+`no_evidence` exists to distinguish "not processed yet" from "processed and
+there is intentionally nothing to evaluate." It is a scheduling and audit status,
+not a dossier artifact. It prevents repeated attempts for unsupported-only,
+no-text-only, or failed-only roots while keeping the visible ledger compact.
+
 `failed` means dossier assembly could not complete because of an unexpected
 processor error, invalid upstream artifact, invalid lineage, persistence error,
 or another condition that prevented a reliable determination. Failed rows remain
@@ -140,30 +145,83 @@ compact and must not contain large payloads or stack traces in Sheets.
 Partial upstream failure is not a dossier failure when at least one usable
 evidence block exists. In that case the dossier must use `assembled` and record
 compact warnings about failed, unsupported, no-text, or skipped sibling sources
-inside the persisted artifact.
+inside `dossier_snapshot.warnings`.
 
 ## Snapshot Object
 
-The dossier processor persists a JSON object based on the existing
-`dossier_snapshot` shape in `JSON-PAYLOAD.md` and
-`schemas/evaluation_payload.schema.json`.
+The dossier processor persists a dossier artifact envelope whose central payload
+is a `dossier_snapshot` object.
 
-This document is the normative dossier-stage refinement for v1: dossier
-evidence blocks include `component_id` and do not include `translation_of`.
+Existing `JSON-PAYLOAD.md`, `TRANSLATE.md`, and
+`schemas/evaluation_payload.schema.json` still describe the pre-dossier v1
+evaluation payload shape. This document is the normative dossier-stage
+refinement for the next v1 pipeline behavior:
+
+- top-level `dossier_snapshot.kind` is removed
+- `dossier_snapshot.components[]` is added
+- `dossier_snapshot.warnings[]` is added
+- `dossier_snapshot.evidence_limits` is added
+- `evidence_text[]` entries include `component_id`
+- `evidence_text[]` entries do not include `name`, `language`,
+  `translation_of`, `was_truncated`, or `original_char_count`
+
 Upstream `translate` artifacts own translation detection and translation
-lineage.
+lineage. Dossier snapshots preserve that lineage through component metadata and
+refs, not paired source-language/English evidence blocks.
 
 Required dossier snapshot fields:
 
-- `kind`
 - `assembled_at`
 - `title_hint`
 - `source_language_hint`
 - `components`
 - `evidence_text`
 - `details`
+- `warnings`
+- `evidence_limits`
 
-The persisted processor artifact envelope must also preserve:
+Target persisted dossier artifact envelope:
+
+```json
+{
+  "artifact_version": "curio-dossier-artifact.v1",
+  "stage": "dossier",
+  "ledger": {
+    "tab": "dossiers",
+    "status": "assembled"
+  },
+  "processor_version": "curio-dossier.v1",
+  "created_at": "2026-04-20T06:15:42.381Z",
+  "root_ref": { "...": "ProcessRef" },
+  "candidate_source_ref": { "...": "ProcessRef" },
+  "download_row": {
+    "Date": "2026-04-20 06:15:42 UTC",
+    "X Date": "",
+    "iMsgX": "https://docs.google.com/spreadsheets/...",
+    "Source": "https://example.invalid/source",
+    "Column": "X1",
+    "Type": "Repo",
+    "Object": "https://drive.google.com/..."
+  },
+  "local_artifact": {
+    "path": "/absolute/path/to/artifact.zip",
+    "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "size_bytes": 12345,
+    "mime_type": "application/zip"
+  },
+  "contributing_refs": [
+    { "...": "ProcessRef" }
+  ],
+  "contributing_artifact_refs": [
+    { "...": "ArtifactRef" }
+  ],
+  "dossier_snapshot": {
+    "...": "DossierSnapshot"
+  }
+}
+```
+
+The persisted processor artifact envelope must preserve:
 
 - processor stage, ledger tab, and processor version
 - root `iMsgX` downloads row ref
@@ -172,13 +230,161 @@ The persisted processor artifact envelope must also preserve:
 - local artifact metadata when available
 - contributing prepared row refs
 - contributing artifact refs
-- compact warnings
-- evidence limit settings actually used
+
+Warnings and evidence limits belong inside `dossier_snapshot`, not only in the
+outer envelope, because the evaluation payload embeds the snapshot for audit
+portability. Implementations may copy warning or limit summaries into artifact
+metadata for indexing, but `dossier_snapshot` is the source of truth.
 
 When the evaluator later persists an accepted evaluation payload, the exact
 dossier snapshot object must be embedded under `dossier_snapshot`. Evaluation
 may also link back to the `dossiers` row or dossier artifact for operational
 traceability.
+
+## JSON Shapes
+
+The shapes below define the dossier-stage schema target. The existing
+machine-readable evaluation schema must be aligned before evaluation can consume
+persisted dossier snapshots.
+
+`DossierSnapshot`:
+
+```json
+{
+  "assembled_at": "2026-04-20T06:15:42.381Z",
+  "title_hint": "Best deterministic title or null",
+  "source_language_hint": "Best source-language hint or null",
+  "components": [
+    { "...": "DossierComponent" }
+  ],
+  "evidence_text": [
+    { "...": "EvidenceBlock" }
+  ],
+  "details": {
+    "...": "DossierDetails"
+  },
+  "warnings": [
+    { "...": "DossierWarning" }
+  ],
+  "evidence_limits": {
+    "max_components": 20,
+    "max_component_chars": 12000,
+    "max_total_evidence_chars": 80000
+  }
+}
+```
+
+`DossierComponent`:
+
+```json
+{
+  "component_id": 1,
+  "name": "repo_readme",
+  "component_type": "repo_readme",
+  "evidence_language": "en",
+  "source_language": "ja",
+  "source_ref": { "...": "ProcessRef" },
+  "artifact_ref": { "...": "ArtifactRef or null" },
+  "text_origin": "translated",
+  "selected_char_count": 8120,
+  "original_char_count": 10421,
+  "was_truncated": false,
+  "metadata": {
+    "path": "README.md"
+  }
+}
+```
+
+`EvidenceBlock`:
+
+```json
+{
+  "block_id": 1,
+  "component_id": 1,
+  "text": "Exact evaluator-visible English evidence text."
+}
+```
+
+`DossierWarning`:
+
+```json
+{
+  "code": "component_truncated",
+  "message": "Component repo_readme was truncated to fit dossier limits.",
+  "component_id": 1,
+  "source_ref": { "...": "ProcessRef or null" }
+}
+```
+
+`DossierDetails`:
+
+```json
+{
+  "root_iMsgX": "https://docs.google.com/spreadsheets/...",
+  "download_type": "Repo",
+  "source_count": 3,
+  "usable_component_count": 2,
+  "evidence_block_count": 2,
+  "truncated_component_count": 1,
+  "component_type_counts": {
+    "repo_readme": 1,
+    "repo_manifest": 1
+  },
+  "source_language_counts": {
+    "en": 1,
+    "ja": 1
+  },
+  "source": {
+    "...": "compact source-specific facts"
+  },
+  "repo": {
+    "...": "compact repo-specific facts when applicable"
+  },
+  "media": {
+    "...": "compact media-specific facts when applicable"
+  }
+}
+```
+
+`ProcessRef` and `ArtifactRef` follow the common processor-boundary shapes in
+`PIPELINE.md`. A dossier component ref must be JSON-serializable and compact. A
+ref should include stable identity fields when known, such as `stage`, `tab`,
+`row_number`, `row_url`, `spreadsheet_id`, `sheet_id`, `artifact_url`,
+`artifact_path`, `artifact_sha256`, and root `iMsgX`. Ref fields that are not
+known may be omitted or set to `null`; refs must not contain large payload text.
+
+## Read-Only Schema Alignment
+
+`JSON-PAYLOAD.md`, `TRANSLATE.md`, and
+`schemas/evaluation_payload.schema.json` are read-only inputs for this dossier
+spec, but they must eventually be aligned with this target shape.
+
+Required schema changes:
+
+- remove `dossierSnapshot.properties.kind`
+- remove `kind` from `dossierSnapshot.required`
+- add `components`, `warnings`, and `evidence_limits` to
+  `dossierSnapshot.required`
+- replace the old `textEvidence` definition with `EvidenceBlock`, requiring only
+  `block_id`, `component_id`, and `text`
+- remove `translation_of` validation and its English-language conditional from
+  dossier evidence blocks
+- add `DossierComponent`, `DossierWarning`, and `EvidenceLimits` definitions
+- require `component_type` and `text_origin` enum validation on components
+- require `evidence_language = "en"` for every component in v1
+- keep evaluation payload embedding the exact `dossier_snapshot` object produced
+  by the dossier stage
+
+Required prose-doc alignment:
+
+- `JSON-PAYLOAD.md` should describe the component-backed dossier snapshot shape
+  instead of the legacy paired-block shape
+- `TRANSLATE.md` should state that translation artifacts preserve source and
+  translated text, while dossier v1 consumes only the prepared English-centered
+  evaluation text
+- `SCHEMA.md` and `PIPELINE.md` should treat `dossiers.Object` as the assembled
+  snapshot artifact link and should not require large warning or limit fields in
+  visible Sheets columns
 
 ## Components
 
@@ -191,7 +397,7 @@ Each component must contain:
 - `name`
 - `evidence_language`
 - `source_language`
-- `kind`
+- `component_type`
 - `source_ref`
 - `artifact_ref`
 - `text_origin`
@@ -221,9 +427,21 @@ or hinted source language, such as `ja` or `fr`, while `evidence_language` is
 variant such as `en-US`, or `null` when upstream translation did not provide a
 reliable code.
 
-`kind` is a compact component category, such as `download_text`,
-`textify_output`, `translation_output`, `repo_readme`, `repo_manifest`,
-`repo_tree`, or `repo_file`.
+`component_type` is a compact component category. V1 values are:
+
+- `source_text`
+- `html_main_text`
+- `textified_file`
+- `repo_readme`
+- `repo_manifest`
+- `repo_tree`
+- `repo_file`
+- `metadata_text`
+
+`source_text` covers direct text evidence from the root source, such as tweet
+text, X article text, or plain downloaded text. `metadata_text` is reserved for
+small deterministic text generated from source metadata, such as a file tree
+listing; it must not contain LLM-generated summaries.
 
 `source_ref` points to the immediate prepared row or ref that produced the
 component. For translated text, this is the contributing translation row or
@@ -240,6 +458,13 @@ separate artifact.
 - `textified_then_already_english`
 - `textified_then_translated`
 - `deterministic_extraction`
+
+`already_english` means upstream translation classified the selected text as
+English and no translation artifact supplied replacement text. `translated`
+means the evaluator-visible text came from an upstream translation artifact.
+The `textified_*` values apply when the text first came from a textification
+artifact. `deterministic_extraction` is for evidence Curio derived without an
+LLM, such as a bounded repo tree component.
 
 `selected_char_count` is the character count included in `evidence_text` for
 this component after dossier limits.
@@ -276,6 +501,28 @@ Evidence blocks intentionally do not repeat component metadata such as `name`,
 `evidence_language`, `source_language`, `was_truncated`, or
 `original_char_count`. That audit metadata lives in `components[]`. The block
 exists to preserve evaluator-visible order and exact text.
+
+## Deterministic Ordering
+
+Ordering is part of dossier behavior because component caps and total character
+caps can change which evidence reaches evaluation.
+
+V1 ordering must be deterministic and stable for the same prepared inputs:
+
+- prepared source objects are ordered by upstream row order when available
+- ties are broken by stable refs, such as `stage`, `tab`, `row_number`,
+  artifact path, artifact SHA-256, or another deterministic identity field
+- file-like components inside one artifact are ordered by normalized relative
+  path unless the source artifact has a stronger deterministic order
+- `component_id` values are assigned after component selection in final component
+  order
+- `block_id` values are assigned after block rendering in final evaluator-visible
+  order
+- component and total evidence limits keep the earliest components and text under
+  that deterministic order
+
+The spec does not assign semantic meaning to earlier or later components beyond
+reproducibility and cap behavior.
 
 ## Translation Lineage
 
@@ -367,11 +614,11 @@ When a component is shortened:
 - keep truncation deterministic
 
 When component count or total evidence limits exclude otherwise usable
-components, the dossier must record compact metadata about omitted components in
-`details` or artifact metadata and add a compact warning.
+components, the dossier must add a compact warning with the number of omitted
+components. V1 does not require preserving per-omitted-component metadata.
 
-Configured limits must be stored in the persisted artifact so later evaluation
-audits can reconstruct the evidence policy used.
+Configured limits must be stored in `dossier_snapshot.evidence_limits` so later
+evaluation audits can reconstruct the evidence policy used.
 
 ## Oversized Artifacts And Repos
 
@@ -387,7 +634,8 @@ For a repo zip, dossier assembly should prefer deterministic components such as:
 
 The snapshot should keep structured repo facts in `details`, such as repo URL,
 owner, repo name, top-level entries, manifest files, README presence, and counts
-for omitted or truncated components.
+for truncated components. Omitted components due to caps only require compact
+warnings in v1.
 
 The dossier must not generate a prose repo summary with an LLM in v1. If a later
 version adds generated repo summaries, that behavior must have a distinct
@@ -400,7 +648,18 @@ model-generated intermediate evidence.
 evaluator and auditor understand the artifact without adding duplicate large
 text.
 
-Examples:
+Required common fields:
+
+- `root_iMsgX`
+- `download_type`
+- `source_count`
+- `usable_component_count`
+- `evidence_block_count`
+- `truncated_component_count`
+- `component_type_counts`
+- `source_language_counts`
+
+Optional source-specific objects may be included when applicable:
 
 - tweet or X article identifiers, author handles, timestamps, and media types
 - canonical URL, page title, and extracted text character count for HTML pages
@@ -423,9 +682,55 @@ Warnings should be added for:
 - omitted components due to configured limits
 - missing optional metadata that affects auditability but not assembly
 
-Warnings must not become visible `dossiers` ledger columns. They belong in the
-persisted artifact and may later be copied into evaluation warnings if the
-evaluator consumed the affected snapshot.
+Each warning must contain:
+
+- `code`
+- `message`
+- `component_id`
+- `source_ref`
+
+V1 warning code values:
+
+- `partial_upstream_failure`
+- `unsupported_source`
+- `no_text_source`
+- `invalid_upstream_artifact`
+- `component_truncated`
+- `component_omitted_due_to_limits`
+- `missing_optional_metadata`
+
+`component_id` is the affected component id, or `null` when the warning is not
+component-specific. `source_ref` is the affected upstream ref, or `null` when no
+single ref applies.
+
+Warnings must not become visible `dossiers` ledger columns. They belong in
+`dossier_snapshot.warnings` so the warning context travels with the exact
+evidence consumed by evaluation. The evaluator may also copy compact dossier
+warning messages into evaluation warnings when that is useful, but the dossier
+snapshot remains the source of truth for preparation warnings.
+
+## Validation Invariants
+
+An assembled dossier snapshot must satisfy these invariants:
+
+- `components` contains at least one item
+- `evidence_text` contains at least one item
+- every `component_id` is a positive integer unique within `components`
+- every `block_id` is a positive integer unique within `evidence_text`
+- every `evidence_text[].component_id` points to exactly one component
+- every component has `evidence_language = "en"` in v1
+- every component has a `component_type` and `text_origin` from the v1 enums
+- `selected_char_count` equals the total character count of all rendered blocks
+  for that component
+- `original_char_count >= selected_char_count`
+- `was_truncated` is true exactly when dossier limits shortened that component
+- `evidence_text` contains no raw file bytes, model rationales, or evaluation
+  judgments
+- `evidence_limits` records the actual configured caps used for assembly
+- `warnings` contains only compact structured warnings
+
+`no_evidence` rows do not have a dossier snapshot and therefore do not satisfy
+the assembled snapshot invariants.
 
 ## Evaluation Handoff
 
@@ -441,6 +746,21 @@ Evaluation must not:
 
 If upstream preparation changes, Curio must produce new upstream processor rows
 and a new dossier snapshot before evaluation is retried.
+
+## Append-Only Idempotency
+
+V1 idempotency is intentionally lazy and append-only.
+
+The dossier processor must never update or overwrite an existing `dossiers` row
+or artifact. A root `iMsgX` is pending only when the scheduler/store finds no
+existing dossier row for that root. Once a root has an `assembled`,
+`no_evidence`, or `failed` dossier row, later scheduler passes should not select
+that same root as new dossier work unless an explicit future reprocessing policy
+creates a new upstream identity.
+
+If implementation reaches a path where it would need to overwrite an existing
+row or artifact, that is an error. It must abort rather than mutate prior
+records.
 
 ## Current Implementation Gaps
 
@@ -458,9 +778,10 @@ Missing before dossier execution can be enabled:
 - store methods for grouping prepared inputs by root `iMsgX`
 - artifact resolution methods for reading prior processor artifacts
 - standalone dossier snapshot schema or dedicated schema validation path
-- schema alignment so `dossier_snapshot` includes `components[]`,
-  `evidence_text[]` includes `component_id`, and the legacy `translation_of`
-  pairing assumption is dropped
+- schema alignment so `dossier_snapshot` removes top-level `kind`, includes
+  `components[]`, `warnings[]`, and `evidence_limits`, `components[]` uses
+  `component_type`, `evidence_text[]` includes `component_id`, and the legacy
+  `translation_of` pairing assumption is dropped
 - config fields for dossier evidence limits
 - offline tests proving evaluation consumes a persisted dossier snapshot rather
   than loose intermediate rows
@@ -482,7 +803,8 @@ for this document.
 - Unsupported-only, no-text-only, or failed-only roots produce `no_evidence`
   when no usable evidence block exists.
 - An oversized repo keeps deterministic selected components within configured
-  limits and records truncation or omission metadata.
+  limits and records truncation metadata plus compact omission warnings when
+  caps exclude otherwise usable components.
 - The persisted dossier artifact preserves source refs, root `iMsgX`,
   contributing records, local artifact metadata, deterministic details, evidence
   limits, and warnings.
