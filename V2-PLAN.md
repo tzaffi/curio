@@ -86,9 +86,9 @@ Do not extract:
    OAuth desktop auth, Keychain-backed token reuse, exact header validation,
    append-only rows, and `RAW` value writes.
 
-2. Add Curio Google config.
+2. Preserve Curio Google config during extraction.
 
-   Curio should have an explicit Google auth block, probably parallel to iMsgX:
+   Curio now has an explicit Google auth block parallel to iMsgX:
 
    ```json
    {
@@ -102,8 +102,9 @@ Do not extract:
    }
    ```
 
-   Pipeline config should continue to hold pipeline-specific sheet IDs and tab
-   names.
+   Pipeline config continues to hold pipeline-specific sheet IDs and tab names.
+   Shared extraction should keep this public config shape stable unless there is
+   a concrete migration reason.
 
 3. Align tests in both projects.
 
@@ -208,4 +209,3 @@ V2 testing must preserve the V1 safety boundary:
 - fake transports should cover all normal Google API request construction
 - live Google tests must be explicit opt-in
 - production commands must not silently use fake stores or local fixture stores
-
