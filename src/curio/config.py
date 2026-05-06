@@ -85,13 +85,54 @@ class TextifyConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class KeychainLocator:
+    service: str
+    account: str
+
+    def __post_init__(self) -> None:
+        _require_string(self.service, "keychain.service")
+        _require_string(self.account, "keychain.account")
+
+
+@dataclass(frozen=True, slots=True)
+class GoogleConfig:
+    oauth_client_credentials_path: Path
+    authorized_user_keychain: KeychainLocator
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.oauth_client_credentials_path, Path):
+            raise ConfigError("config.json must define 'google.oauth_client_credentials_path' as a Path")
+        if not isinstance(self.authorized_user_keychain, KeychainLocator):
+            raise ConfigError("config.json must define 'google.authorized_user_keychain' as a KeychainLocator")
+
+
+@dataclass(frozen=True, slots=True)
+class PipelineTabsConfig:
+    imsgx: str
+    downloads: str
+    textifications: str
+    translations: str
+
+    def __post_init__(self) -> None:
+        _require_string(self.imsgx, "pipeline.tabs.imsgx")
+        _require_string(self.downloads, "pipeline.tabs.downloads")
+        _require_string(self.textifications, "pipeline.tabs.textifications")
+        _require_string(self.translations, "pipeline.tabs.translations")
+
+
+@dataclass(frozen=True, slots=True)
 class PipelineConfig:
     downloads_dir: Path
+    spreadsheet_id: str
+    tabs: PipelineTabsConfig
     artifact_root: Path | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.downloads_dir, Path):
             raise ConfigError("config.json must define 'pipeline.downloads_dir' as a Path")
+        _require_string(self.spreadsheet_id, "pipeline.spreadsheet_id")
+        if not isinstance(self.tabs, PipelineTabsConfig):
+            raise ConfigError("config.json must define 'pipeline.tabs' as a PipelineTabsConfig")
         if self.artifact_root is not None and not isinstance(self.artifact_root, Path):
             raise ConfigError("config.json must define 'pipeline.artifact_root' as a Path or null")
 
@@ -103,11 +144,14 @@ class PipelineConfig:
 @dataclass(frozen=True, slots=True)
 class CurioConfig:
     llm_callers: Mapping[str, LlmCallerConfig]
+    google_config: GoogleConfig
     pipeline_config: PipelineConfig
     translate_config: TranslateConfig = field(default_factory=TranslateConfig)
     textify_config: TextifyConfig = field(default_factory=TextifyConfig)
 
     def __post_init__(self) -> None:
+        if not isinstance(self.google_config, GoogleConfig):
+            raise ConfigError("config.json must define 'google' as a GoogleConfig")
         if not isinstance(self.translate_config, TranslateConfig):
             raise ConfigError("config.json must define 'translate' as a TranslateConfig")
         if not isinstance(self.textify_config, TextifyConfig):
@@ -147,6 +191,7 @@ def load_config(path: Path | None = None) -> CurioConfig:
         raise ConfigError("config.json must define at least one llm_caller")
     return CurioConfig(
         llm_callers=llm_callers,
+        google_config=_parse_google_config(data.get("google"), config_dir),
         translate_config=_parse_translate_config(data.get("translate")),
         textify_config=_parse_textify_config(data.get("textify")),
         pipeline_config=_parse_pipeline_config(data.get("pipeline"), config_dir),
@@ -277,6 +322,29 @@ def _parse_textify_config(value: object) -> TextifyConfig:
     )
 
 
+def _parse_google_config(value: object, config_dir: Path) -> GoogleConfig:
+    data = _require_mapping(value, "google")
+    return GoogleConfig(
+        oauth_client_credentials_path=_resolve_config_path(
+            data.get("oauth_client_credentials_path"),
+            "google.oauth_client_credentials_path",
+            config_dir,
+        ),
+        authorized_user_keychain=_parse_keychain_locator(
+            data.get("authorized_user_keychain"),
+            "google.authorized_user_keychain",
+        ),
+    )
+
+
+def _parse_keychain_locator(value: object, name: str) -> KeychainLocator:
+    data = _require_mapping(value, name)
+    return KeychainLocator(
+        service=_require_string(data.get("service"), f"{name}.service"),
+        account=_require_string(data.get("account"), f"{name}.account"),
+    )
+
+
 def _parse_pipeline_config(value: object, config_dir: Path) -> PipelineConfig:
     data = _require_mapping(value, "pipeline")
     return PipelineConfig(
@@ -288,6 +356,18 @@ def _parse_pipeline_config(value: object, config_dir: Path) -> PipelineConfig:
         artifact_root=None
         if data.get("artifact_root") is None
         else _resolve_config_path(data.get("artifact_root"), "pipeline.artifact_root", config_dir),
+        spreadsheet_id=_require_string(data.get("spreadsheet_id"), "pipeline.spreadsheet_id"),
+        tabs=_parse_pipeline_tabs_config(data.get("tabs")),
+    )
+
+
+def _parse_pipeline_tabs_config(value: object) -> PipelineTabsConfig:
+    data = _require_mapping(value, "pipeline.tabs")
+    return PipelineTabsConfig(
+        imsgx=_require_string(data.get("imsgx"), "pipeline.tabs.imsgx"),
+        downloads=_require_string(data.get("downloads"), "pipeline.tabs.downloads"),
+        textifications=_require_string(data.get("textifications"), "pipeline.tabs.textifications"),
+        translations=_require_string(data.get("translations"), "pipeline.tabs.translations"),
     )
 
 

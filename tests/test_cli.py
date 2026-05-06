@@ -1,3 +1,4 @@
+import io
 import json
 from collections.abc import Sequence
 from pathlib import Path
@@ -7,7 +8,13 @@ from typer.testing import CliRunner
 
 import curio.cli as cli
 from curio.cli import app
-from curio.config import LlmCallerPromptConfig, TextifyConfig, TranslateConfig
+from curio.config import (
+    LlmCallerPromptConfig,
+    PipelineConfig,
+    PipelineTabsConfig,
+    TextifyConfig,
+    TranslateConfig,
+)
 from curio.llm_caller import (
     LlmCostEstimate,
     LlmOutput,
@@ -18,6 +25,18 @@ from curio.llm_caller import (
     LlmUsage,
     MeteredObject,
     ProviderName,
+)
+from curio.pipeline import (
+    InMemoryPipelineStore,
+    PipelinePreviewAction,
+    PipelinePreviewItem,
+    PipelineSelector,
+    PipelineStage,
+    ProcessCandidate,
+    ProcessRecord,
+    ProcessRef,
+    TextifyProcessStatus,
+    TranslateProcessStatus,
 )
 from curio.textify import (
     SuggestedTextFile,
@@ -44,10 +63,22 @@ class FakeCurioConfig:
         self,
         llm_caller: str | None,
         prompt_configs: dict[str, LlmCallerPromptConfig | None] | None = None,
+        pipeline_config: PipelineConfig | None = None,
     ) -> None:
         self.translate_config = TranslateConfig(llm_caller=llm_caller)
         self.textify_config = TextifyConfig(llm_caller=llm_caller)
         self.prompt_configs = {} if prompt_configs is None else dict(prompt_configs)
+        self.google_config = "google-config"
+        self.pipeline_config = pipeline_config or PipelineConfig(
+            downloads_dir=Path("/tmp/curio-test-downloads"),
+            spreadsheet_id="spreadsheet-id",
+            tabs=PipelineTabsConfig(
+                imsgx="iMsgX",
+                downloads="downloads",
+                textifications="textifications",
+                translations="translations",
+            ),
+        )
 
     def llm_caller_config(self, name: str) -> object:
         class FakeCallerConfig:
@@ -56,6 +87,164 @@ class FakeCurioConfig:
                 self.pricing_config = None
 
         return FakeCallerConfig(self.prompt_configs.get(name))
+
+
+class FakePipelineConfig:
+    google_config = "google-config"
+    pipeline_config = "pipeline-config"
+
+
+class FakePipelinePreviewStore:
+    def __init__(self, items_by_stage: dict[str, list[PipelinePreviewItem]]) -> None:
+        self.items_by_stage = {stage: list(items) for stage, items in items_by_stage.items()}
+        self.calls: list[tuple[str, int]] = []
+
+    def preview_stage(self, stage: str, *, limit: int) -> tuple[PipelinePreviewItem, ...]:
+        self.calls.append((stage, limit))
+        return tuple(self.items_by_stage.get(stage, [])[:limit])
+
+
+class FailingAppendPipelineStore(InMemoryPipelineStore):
+    def append_record(self, record: ProcessRecord) -> ProcessRecord:
+        del record
+        raise cli.GoogleSheetsPipelineStoreError("append failed")
+
+
+def make_preview_item(stage: str = "textify") -> PipelinePreviewItem:
+    ref = ProcessRef(stage="download", tab="downloads", source="x://post/123", row_number=25)
+    return PipelinePreviewItem(
+        stage=stage,
+        downloads_row=25,
+        source="x://post/123",
+        input_ref=ref,
+        action=PipelinePreviewAction.WOULD_PROCESS,
+        reason="no existing row",
+    )
+
+
+def make_runtime_pipeline_config(tmp_path: Path) -> PipelineConfig:
+    return PipelineConfig(
+        downloads_dir=tmp_path / "downloads",
+        artifact_root=tmp_path / "artifacts",
+        spreadsheet_id="spreadsheet-id",
+        tabs=PipelineTabsConfig(
+            imsgx="iMsgX",
+            downloads="downloads",
+            textifications="textifications",
+            translations="translations",
+        ),
+    )
+
+
+def make_runtime_config(tmp_path: Path, llm_caller: str | None = "pipeline_llm") -> FakeCurioConfig:
+    return FakeCurioConfig(llm_caller, pipeline_config=make_runtime_pipeline_config(tmp_path))
+
+
+def install_fake_pipeline_runtime_store(
+    monkeypatch: pytest.MonkeyPatch,
+    config: FakeCurioConfig,
+    store: object,
+    selectors: list[PipelineSelector],
+) -> None:
+    monkeypatch.setattr(cli, "load_config", lambda _path: config)
+
+    def fake_from_config(**kwargs: object) -> object:
+        selector = kwargs["selector"]
+        assert isinstance(selector, PipelineSelector)
+        selectors.append(selector)
+        assert kwargs["google_config"] == "google-config"
+        assert kwargs["pipeline_config"] == config.pipeline_config
+        return store
+
+    monkeypatch.setattr(cli.GoogleSheetsPipelineStore, "from_config", staticmethod(fake_from_config))
+
+
+def make_textify_process_candidate(tmp_path: Path) -> ProcessCandidate:
+    artifact = tmp_path / "downloads" / "imsgx-r0025-x1-image-203-photo-1.png"
+    artifact.parent.mkdir()
+    artifact.write_bytes(b"png")
+    ref = ProcessRef(
+        stage="download",
+        tab="downloads",
+        source="x://post/123",
+        row_number=25,
+        artifact_path=str(artifact),
+        artifact_sha256="sha",
+    )
+    return ProcessCandidate(
+        source_ref=ref,
+        imsgx=ref,
+        source="x://post/123",
+        artifact_key=artifact.name,
+        metadata={
+            "path": str(artifact),
+            "name": artifact.name,
+            "mime_type": "image/png",
+            "request_id": "textify-pipeline-test",
+        },
+    )
+
+
+def make_textify_video_process_candidate() -> ProcessCandidate:
+    ref = ProcessRef(
+        stage="download",
+        tab="downloads",
+        source="https://x.com/sharbel/status/2025944354070659094/video/1",
+        row_number=9,
+    )
+    return ProcessCandidate(
+        source_ref=ref,
+        imsgx=ref,
+        source=ref.source,
+        artifact_key=None,
+        metadata={
+            "source": ref.source,
+            "type": "Tweet",
+            "column": "Text",
+            "object": "https://drive.google.com/file/d/video-file/view",
+            "request_id": "textify-video-pipeline-test",
+        },
+    )
+
+
+def make_translate_process_candidate() -> ProcessCandidate:
+    source_ref = ProcessRef(
+        stage=PipelineStage.TEXTIFY.value,
+        tab="textifications",
+        source="x://post/123",
+        row_number=2,
+    )
+    imsgx = ProcessRef(stage="download", tab="downloads", source="x://post/123", row_number=25)
+    return ProcessCandidate(
+        source_ref=source_ref,
+        imsgx=imsgx,
+        source="x://post/123",
+        artifact_key="textification.json",
+        metadata={
+            "text": "bonjour",
+            "name": "tweet_text",
+            "source_language_hint": "fr",
+            "request_id": "translate-pipeline-test",
+        },
+    )
+
+
+def install_fake_pipeline_preview_store(
+    monkeypatch: pytest.MonkeyPatch,
+    store: object,
+    selectors: list[PipelineSelector],
+) -> None:
+    monkeypatch.setattr(cli, "load_config", lambda _path: FakePipelineConfig())
+
+    def fake_from_config(**kwargs: object) -> object:
+        selector = kwargs["selector"]
+        assert isinstance(selector, PipelineSelector)
+        selectors.append(selector)
+        assert kwargs["google_config"] == "google-config"
+        assert kwargs["pipeline_config"] == "pipeline-config"
+        return store
+
+    monkeypatch.setattr(cli.GoogleSheetsPipelineStore, "from_config", staticmethod(fake_from_config))
 
 
 def make_usage() -> LlmUsage:
@@ -170,6 +359,15 @@ class FakeTextifyService:
         )
 
 
+class FailingTextifyService:
+    def __init__(self) -> None:
+        self.requests: list[TextifyRequest] = []
+
+    def textify(self, request: TextifyRequest) -> TextifyResponse:
+        self.requests.append(request)
+        raise RuntimeError("provider failed\nwith details")
+
+
 def install_fake_service(monkeypatch: pytest.MonkeyPatch, service: FakeTranslationService) -> None:
     monkeypatch.setattr(
         cli,
@@ -183,7 +381,7 @@ def install_fake_textify_service(monkeypatch: pytest.MonkeyPatch, service: FakeT
     monkeypatch.setattr(
         cli,
         "_build_textify_service",
-        lambda _llm_caller, _config_path, config=None: service,
+        lambda _llm_caller, _config_path, config=None, **_kwargs: service,
     )
     install_fake_config(monkeypatch, "textifier_codex_gpt_54_mini")
 
@@ -278,6 +476,7 @@ def test_pipeline_run_stage_help_exposes_persist_and_preview_controls() -> None:
     assert result.exit_code == 0
     assert "STAGE:{textify|translate}" in result.output
     for option in (
+        "--config",
         "--limit",
         "--persist",
         "--start",
@@ -297,18 +496,445 @@ def test_pipeline_run_stage_help_exposes_persist_and_preview_controls() -> None:
 
 
 def test_pipeline_reserved_commands_report_stub_status() -> None:
-    commands = (
-        ("run", "--limit", "2", "--persist"),
-        ("run", "--row", "7", "--json"),
-        ("run-stage", "textify", "--limit", "7", "--persist"),
-        ("run-stage", "textify", "--source", "x://post/123"),
-        ("doctor", "--from-row", "7", "--to-row", "9", "--json"),
-    )
-    for command in commands:
-        result = runner.invoke(app, ["pipeline", *command])
+    result = runner.invoke(app, ["pipeline", "run", "--limit", "2", "--persist"])
 
-        assert result.exit_code == 1
-        assert f"pipeline {command[0]} is reserved but not implemented yet." in result.output
+    assert result.exit_code == 1
+    assert "pipeline run is reserved but not implemented yet." in result.output
+
+
+def test_pipeline_run_stage_textify_persist_executes_processor(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = make_runtime_config(tmp_path)
+    candidate = make_textify_process_candidate(tmp_path)
+    store = InMemoryPipelineStore({PipelineStage.TEXTIFY.value: [candidate]})
+    selectors: list[PipelineSelector] = []
+    service = FakeTextifyService()
+    textify_service_calls: list[dict[str, object]] = []
+    install_fake_pipeline_runtime_store(monkeypatch, config, store, selectors)
+
+    def fake_build_textify_service(
+        llm_caller: str | None,
+        config_path: Path | None,
+        config: object | None = None,
+        **kwargs: object,
+    ) -> FakeTextifyService:
+        textify_service_calls.append(
+            {
+                "llm_caller": llm_caller,
+                "config_path": config_path,
+                "config": config,
+                **kwargs,
+            }
+        )
+        return service
+
+    monkeypatch.setattr(cli, "_build_textify_service", fake_build_textify_service)
+
+    result = runner.invoke(
+        app,
+        ["pipeline", "run-stage", "textify", "--config", "curio.json", "--limit", "1", "--persist"],
+    )
+
+    assert result.exit_code == 0
+    assert "pipeline run-stage is reserved" not in result.output
+    assert "textify" in result.output
+    assert "recorded" in result.output
+    assert TextifyProcessStatus.CONVERTED.value in result.output
+    assert selectors == [PipelineSelector()]
+    assert textify_service_calls == [
+        {
+            "llm_caller": "pipeline_llm",
+            "config_path": Path("curio.json"),
+            "config": config,
+            "codex_working_directory": tmp_path,
+        }
+    ]
+    assert len(service.requests) == 1
+    assert service.requests[0].request_id == "textify-pipeline-test"
+    assert store.records[0].status == TextifyProcessStatus.CONVERTED.value
+    assert store.records[0].object_ is not None
+    assert store.records[0].object_.path is not None
+    assert Path(store.records[0].object_.path).exists()
+    assert Path(store.records[0].object_.path).parent == tmp_path / "artifacts" / "textifications"
+
+
+def test_pipeline_run_stage_textify_persist_records_unsupported_video_without_service_call(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = make_runtime_config(tmp_path)
+    candidate = make_textify_video_process_candidate()
+    store = InMemoryPipelineStore({PipelineStage.TEXTIFY.value: [candidate]})
+    selectors: list[PipelineSelector] = []
+    service = FakeTextifyService()
+    install_fake_pipeline_runtime_store(monkeypatch, config, store, selectors)
+    monkeypatch.setattr(cli, "_build_textify_service", lambda _llm_caller, _config_path, config=None, **_kwargs: service)
+
+    result = runner.invoke(
+        app,
+        ["pipeline", "run-stage", "textify", "--config", "curio.json", "--limit", "1", "--persist"],
+    )
+
+    assert result.exit_code == 0
+    assert "textify" in result.output
+    assert "recorded" in result.output
+    assert TextifyProcessStatus.UNSUPPORTED.value in result.output
+    assert "failed" not in result.output
+    assert selectors == [PipelineSelector()]
+    assert service.requests == []
+    assert store.records[0].status == TextifyProcessStatus.UNSUPPORTED.value
+    assert store.records[0].object_ is None
+    assert not (tmp_path / "artifacts" / "textifications").exists()
+
+
+def test_pipeline_run_stage_translate_persist_executes_processor(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = make_runtime_config(tmp_path)
+    candidate = make_translate_process_candidate()
+    store = InMemoryPipelineStore({PipelineStage.TRANSLATE.value: [candidate]})
+    selectors: list[PipelineSelector] = []
+    service = FakeTranslationService()
+    install_fake_pipeline_runtime_store(monkeypatch, config, store, selectors)
+    monkeypatch.setattr(cli, "_build_translation_service", lambda _llm_caller, _config_path, config=None: service)
+
+    result = runner.invoke(app, ["pipeline", "run-stage", "translate", "--limit", "1", "--persist"])
+
+    assert result.exit_code == 0
+    assert "translate" in result.output
+    assert "recorded" in result.output
+    assert TranslateProcessStatus.TRANSLATED.value in result.output
+    assert selectors == [PipelineSelector()]
+    assert len(service.requests) == 1
+    assert service.requests[0].request_id == "translate-pipeline-test"
+    assert store.records[0].status == TranslateProcessStatus.TRANSLATED.value
+    assert store.records[0].object_ is not None
+    assert store.records[0].object_.path is not None
+    assert Path(store.records[0].object_.path).parent == tmp_path / "artifacts" / "translations"
+
+
+def test_pipeline_run_stage_persist_reports_no_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = make_runtime_config(tmp_path)
+    store = InMemoryPipelineStore()
+    selectors: list[PipelineSelector] = []
+    install_fake_pipeline_runtime_store(monkeypatch, config, store, selectors)
+    monkeypatch.setattr(cli, "_build_textify_service", lambda _llm_caller, _config_path, config=None, **_kwargs: FakeTextifyService())
+
+    result = runner.invoke(app, ["pipeline", "run-stage", "textify", "--limit", "1", "--persist"])
+
+    assert result.exit_code == 0
+    assert "no_candidate" in result.output
+    assert "record_status" in result.output
+    assert selectors == [PipelineSelector()]
+
+
+def test_pipeline_progress_callback_renders_only_progressing_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    stream = io.StringIO()
+    console_calls: list[dict[str, object]] = []
+    progress_calls: list[dict[str, object]] = []
+    task_calls: list[dict[str, object]] = []
+    advances: list[int] = []
+
+    class FakeConsole:
+        is_terminal = True
+
+        def __init__(self, **kwargs: object) -> None:
+            console_calls.append(kwargs)
+
+    class FakeProgress:
+        def __init__(self, **kwargs: object) -> None:
+            progress_calls.append(kwargs)
+
+        def __enter__(self) -> "FakeProgress":
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+            return None
+
+        def add_task(self, description: str, *, total: int) -> int:
+            task_calls.append({"description": description, "total": total})
+            return 17
+
+        def advance(self, task_id: int) -> None:
+            advances.append(task_id)
+
+    monkeypatch.setattr(cli, "Console", FakeConsole)
+    monkeypatch.setattr(cli, "Progress", FakeProgress)
+
+    with cli._pipeline_progress_callback(
+        stage=PipelineStage.TEXTIFY,
+        total=2,
+        stream=stream,
+        force=True,
+    ) as progress_callback:
+        progress_callback(
+            cli.ProcessorRunResult(
+                stage=PipelineStage.TEXTIFY.value,
+                status=cli.ProcessorRunStatus.RECORDED,
+            )
+        )
+        progress_callback(
+            cli.ProcessorRunResult(
+                stage=PipelineStage.TEXTIFY.value,
+                status=cli.ProcessorRunStatus.NO_CANDIDATE,
+            )
+        )
+        progress_callback(
+            cli.ProcessorRunResult(
+                stage=PipelineStage.TEXTIFY.value,
+                status=cli.ProcessorRunStatus.FAILED,
+            )
+        )
+
+    assert console_calls == [{"file": stream, "force_terminal": True}]
+    assert len(progress_calls) == 1
+    assert isinstance(progress_calls[0]["console"], FakeConsole)
+    assert progress_calls[0]["disable"] is False
+    assert task_calls == [{"description": "Textifying downloads", "total": 2}]
+    assert advances == [17, 17]
+
+
+def test_pipeline_run_stage_persist_renders_recorded_failure_detail(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = make_runtime_config(tmp_path)
+    candidate = make_textify_process_candidate(tmp_path)
+    store = InMemoryPipelineStore({PipelineStage.TEXTIFY.value: [candidate]})
+    selectors: list[PipelineSelector] = []
+    service = FailingTextifyService()
+    install_fake_pipeline_runtime_store(monkeypatch, config, store, selectors)
+    monkeypatch.setattr(cli, "_build_textify_service", lambda _llm_caller, _config_path, config=None, **_kwargs: service)
+
+    result = runner.invoke(app, ["pipeline", "run-stage", "textify", "--limit", "1", "--persist"])
+
+    assert result.exit_code == 0
+    assert "detail" in result.output
+    assert "RuntimeError: provider failed with details" in result.output
+    assert store.records[0].status == TextifyProcessStatus.FAILED.value
+    assert store.records[0].metadata == {
+        "error_type": "RuntimeError",
+        "error": "provider failed\nwith details",
+    }
+
+
+def test_pipeline_run_stage_persist_requires_configured_stage_llm_caller(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(cli, "load_config", lambda _path: make_runtime_config(tmp_path, llm_caller=None))
+
+    textify_result = runner.invoke(app, ["pipeline", "run-stage", "textify", "--persist"])
+    translate_result = runner.invoke(app, ["pipeline", "run-stage", "translate", "--persist"])
+
+    assert textify_result.exit_code == 2
+    assert cli.PIPELINE_TEXTIFY_LLM_CALLER_REQUIRED_MESSAGE in textify_result.output
+    assert translate_result.exit_code == 2
+    assert cli.PIPELINE_TRANSLATE_LLM_CALLER_REQUIRED_MESSAGE in translate_result.output
+
+
+def test_pipeline_run_stage_persist_reports_processor_build_and_runtime_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = make_runtime_config(tmp_path)
+    candidate = make_textify_process_candidate(tmp_path)
+    selectors: list[PipelineSelector] = []
+    install_fake_pipeline_runtime_store(
+        monkeypatch,
+        config,
+        FailingAppendPipelineStore({PipelineStage.TEXTIFY.value: [candidate]}),
+        selectors,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_build_textify_service",
+        lambda _llm_caller, _config_path, config=None, **_kwargs: (_ for _ in ()).throw(cli.LlmCallerError("bad caller")),
+    )
+
+    build_result = runner.invoke(app, ["pipeline", "run-stage", "textify", "--persist"])
+
+    assert build_result.exit_code == 1
+    assert "bad caller" in build_result.output
+    assert selectors == []
+
+    monkeypatch.setattr(cli, "_build_textify_service", lambda _llm_caller, _config_path, config=None, **_kwargs: FakeTextifyService())
+
+    runtime_result = runner.invoke(app, ["pipeline", "run-stage", "textify", "--persist"])
+
+    assert runtime_result.exit_code == 1
+    assert "append failed" in runtime_result.output
+    assert selectors == [PipelineSelector()]
+
+
+def test_pipeline_run_stage_selector_previews_human_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = FakePipelinePreviewStore({"textify": [make_preview_item()]})
+    selectors: list[PipelineSelector] = []
+    install_fake_pipeline_preview_store(monkeypatch, store, selectors)
+
+    result = runner.invoke(app, ["pipeline", "run-stage", "textify", "--config", "curio.json", "--row", "25"])
+
+    assert result.exit_code == 0
+    assert "pipeline run-stage is reserved" not in result.output
+    assert "stage" in result.output
+    assert "downloads_row" in result.output
+    assert "textify" in result.output
+    assert "downloads!25" in result.output
+    assert "would_process" in result.output
+    assert selectors == [PipelineSelector(row=25)]
+    assert store.calls == [("textify", 10)]
+
+
+def test_pipeline_run_stage_selector_previews_json_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = FakePipelinePreviewStore({"textify": [make_preview_item()]})
+    selectors: list[PipelineSelector] = []
+    install_fake_pipeline_preview_store(monkeypatch, store, selectors)
+
+    result = runner.invoke(app, ["pipeline", "run-stage", "textify", "--source", "x://post/123", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["items"][0]["stage"] == "textify"
+    assert payload["items"][0]["downloads_row"] == 25
+    assert payload["items"][0]["source"] == "x://post/123"
+    assert payload["items"][0]["input_ref"]["tab"] == "downloads"
+    assert payload["items"][0]["action"] == "would_process"
+    assert selectors == [PipelineSelector(source="x://post/123")]
+
+
+def test_pipeline_run_and_doctor_preview_current_scope(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = FakePipelinePreviewStore(
+        {
+            "textify": [make_preview_item("textify")],
+            "translate": [make_preview_item("translate")],
+        }
+    )
+    selectors: list[PipelineSelector] = []
+    install_fake_pipeline_preview_store(monkeypatch, store, selectors)
+
+    run_result = runner.invoke(app, ["pipeline", "run", "--row", "25"])
+    doctor_result = runner.invoke(app, ["pipeline", "doctor", "--from-row", "20", "--to-row", "30", "--json"])
+
+    assert run_result.exit_code == 0
+    assert "textify" in run_result.output
+    assert "translate" in run_result.output
+    assert doctor_result.exit_code == 0
+    doctor_payload = json.loads(doctor_result.output)
+    assert [item["stage"] for item in doctor_payload["items"]] == ["textify", "translate"]
+    assert selectors == [
+        PipelineSelector(row=25),
+        PipelineSelector(from_row=20, to_row=30),
+    ]
+    assert store.calls == [
+        ("textify", 10),
+        ("translate", 10),
+        ("textify", 10),
+        ("translate", 10),
+    ]
+
+
+def test_pipeline_preview_renders_no_matches(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = FakePipelinePreviewStore({"textify": []})
+    selectors: list[PipelineSelector] = []
+    install_fake_pipeline_preview_store(monkeypatch, store, selectors)
+
+    result = runner.invoke(app, ["pipeline", "run-stage", "textify", "--row", "99"])
+
+    assert result.exit_code == 0
+    assert result.output == "No matching pipeline preview rows.\n"
+
+
+def test_pipeline_preview_rejects_invalid_selector_before_config_load() -> None:
+    result = runner.invoke(app, ["pipeline", "run-stage", "textify", "--row", "0"])
+
+    assert result.exit_code == 2
+    assert "row must be a positive row number" in result.output
+
+
+def test_pipeline_preview_rejects_non_positive_limit() -> None:
+    result = runner.invoke(app, ["pipeline", "run-stage", "textify", "--row", "1", "--limit", "0"])
+
+    assert result.exit_code == 2
+    assert "--limit must be a positive integer" in result.output
+
+
+def test_pipeline_run_stage_persist_rejects_non_positive_limit() -> None:
+    result = runner.invoke(app, ["pipeline", "run-stage", "textify", "--persist", "--limit", "0"])
+
+    assert result.exit_code == 2
+    assert "--limit must be a positive integer" in result.output
+
+
+def test_pipeline_preview_reports_config_and_google_store_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "load_config", lambda _path: (_ for _ in ()).throw(cli.ConfigError("bad config")))
+    config_result = runner.invoke(app, ["pipeline", "run-stage", "textify", "--row", "1"])
+
+    assert config_result.exit_code == 1
+    assert "bad config" in config_result.output
+
+    monkeypatch.setattr(cli, "load_config", lambda _path: FakePipelineConfig())
+
+    def fail_from_config(**kwargs: object) -> object:
+        del kwargs
+        raise cli.GoogleSheetsPipelineStoreError("bad sheet")
+
+    monkeypatch.setattr(cli.GoogleSheetsPipelineStore, "from_config", staticmethod(fail_from_config))
+    sheet_result = runner.invoke(app, ["pipeline", "run-stage", "textify", "--row", "1"])
+
+    assert sheet_result.exit_code == 1
+    assert "bad sheet" in sheet_result.output
+
+
+def test_pipeline_preview_reports_preview_planner_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FailingPreviewStore:
+        def preview_stage(self, stage: str, *, limit: int) -> tuple[PipelinePreviewItem, ...]:
+            del stage, limit
+            raise cli.GoogleSheetsPipelineStoreError("preview failed")
+
+    selectors: list[PipelineSelector] = []
+    install_fake_pipeline_preview_store(monkeypatch, FailingPreviewStore(), selectors)
+
+    result = runner.invoke(app, ["pipeline", "run-stage", "textify", "--row", "1"])
+
+    assert result.exit_code == 1
+    assert "preview failed" in result.output
+
+
+def test_pipeline_preview_ref_formatting_branches() -> None:
+    assert cli._format_pipeline_ref(None) == "-"
+    assert (
+        cli._format_pipeline_ref(
+            ProcessRef(stage="textify", tab="textifications", source="source", artifact_path="/tmp/textify.json")
+        )
+        == "/tmp/textify.json"
+    )
+    assert cli._format_pipeline_ref(ProcessRef(stage="download", tab="downloads", source="source")) == "source"
+
+
+def test_pipeline_run_result_detail_fallbacks() -> None:
+    ref = ProcessRef(stage="download", tab="downloads", source="source", row_number=1)
+    failed_result = cli.ProcessorRunResult(
+        stage=PipelineStage.TEXTIFY.value,
+        status=cli.ProcessorRunStatus.FAILED,
+    )
+    failed_record = ProcessRecord(
+        stage=PipelineStage.TEXTIFY.value,
+        ledger_tab="textifications",
+        version="processor-v1",
+        source_ref=ref,
+        imsgx=ref,
+        status=TextifyProcessStatus.FAILED.value,
+        metadata={"error": "only error"},
+    )
+
+    assert cli._pipeline_run_result_detail(failed_result, object()) == "-"
+    assert cli._pipeline_run_result_detail(failed_result, failed_record) == "only error"
 
 
 def test_pipeline_next_available_sweeps_require_persist() -> None:
@@ -336,6 +962,20 @@ def test_pipeline_persist_rejects_targeted_selectors() -> None:
         assert "--persist cannot be combined with row, date, or source selectors" in result.output
 
 
+def test_pipeline_persist_rejects_json_output() -> None:
+    result = runner.invoke(app, ["pipeline", "run-stage", "textify", "--persist", "--json"])
+
+    assert result.exit_code == 2
+    assert "--json cannot be combined with --persist" in result.output
+
+
+def test_pipeline_doctor_requires_selector() -> None:
+    result = runner.invoke(app, ["pipeline", "doctor"])
+
+    assert result.exit_code == 2
+    assert "requires a row, date, or source selector" in result.output
+
+
 def test_pipeline_does_not_offer_source_runner_shortcuts() -> None:
     run_help = runner.invoke(app, ["pipeline", "run", "--help"])
     source_command = runner.invoke(app, ["pipeline", "run-source", "x://post/123"])
@@ -351,18 +991,29 @@ def test_pipeline_does_not_offer_source_runner_shortcuts() -> None:
 
 def test_cli_build_llm_caller_client_delegates_to_llm_factory(monkeypatch: pytest.MonkeyPatch) -> None:
     client = FakeLlmClient(ProviderName.CODEX_CLI)
-    calls: list[tuple[str, object]] = []
+    calls: list[tuple[str, object, Path]] = []
 
     def fake_build_llm_caller_client(name: str, config: object, **kwargs: object) -> FakeLlmClient:
-        del kwargs
-        calls.append((name, config))
+        assert isinstance(kwargs["codex_working_directory"], Path)
+        calls.append((name, config, kwargs["codex_working_directory"]))
         return client
 
     monkeypatch.setattr(cli, "load_config", lambda path: f"loaded:{path}")
     monkeypatch.setattr(cli, "build_llm_caller_client", fake_build_llm_caller_client)
 
     assert cli._build_llm_caller_client("translator_openai_gpt_54_mini_cold", Path("curio-config.json")) is client
-    assert calls == [("translator_openai_gpt_54_mini_cold", "loaded:curio-config.json")]
+    assert (
+        cli._build_llm_caller_client(
+            "textifier_codex_gpt_54_mini",
+            None,
+            codex_working_directory=Path("/tmp/iMsgX"),
+        )
+        is client
+    )
+    assert calls == [
+        ("translator_openai_gpt_54_mini_cold", "loaded:curio-config.json", Path.cwd()),
+        ("textifier_codex_gpt_54_mini", "loaded:None", Path("/tmp/iMsgX")),
+    ]
 
 
 def test_translate_llm_caller_factory_errors_are_runtime_errors(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1171,7 +1822,7 @@ def test_textify_reports_runtime_and_output_write_failures(monkeypatch: pytest.M
     monkeypatch.setattr(
         cli,
         "_build_textify_service",
-        lambda _llm_caller, _config_path, config=None: (_ for _ in ()).throw(cli.LlmCallerError("provider down")),
+        lambda _llm_caller, _config_path, config=None, **_kwargs: (_ for _ in ()).throw(cli.LlmCallerError("provider down")),
     )
     runtime = runner.invoke(app, ["textify", str(artifact_path)])
     assert runtime.exit_code == 1
@@ -1187,7 +1838,7 @@ def test_textify_reports_runtime_and_output_write_failures(monkeypatch: pytest.M
 def test_textify_default_service_and_resolution_helpers(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     client = FakeLlmClient(ProviderName.CODEX_CLI)
     install_fake_config(monkeypatch, "textifier_codex_gpt_54_mini")
-    monkeypatch.setattr(cli, "_build_llm_caller_client", lambda _llm_caller, _config_path, config=None: client)
+    monkeypatch.setattr(cli, "_build_llm_caller_client", lambda _llm_caller, _config_path, config=None, **_kwargs: client)
 
     service = cli._build_textify_service("textifier_codex_gpt_54_mini", None)
 

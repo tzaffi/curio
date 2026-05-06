@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -7,8 +8,11 @@ from curio import config as config_module
 from curio.config import (
     ConfigError,
     CurioConfig,
+    GoogleConfig,
+    KeychainLocator,
     LlmCallerPromptConfig,
     PipelineConfig,
+    PipelineTabsConfig,
     TextifyConfig,
     TranslateConfig,
     load_config,
@@ -40,6 +44,48 @@ def write_config(path: Path, payload: object) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def pipeline_tabs_config() -> PipelineTabsConfig:
+    return PipelineTabsConfig(
+        imsgx="iMsgX",
+        downloads="downloads",
+        textifications="textifications",
+        translations="translations",
+    )
+
+
+def pipeline_payload(downloads_dir: str, artifact_root: str | None) -> dict[str, object]:
+    return {
+        "downloads_dir": downloads_dir,
+        "artifact_root": artifact_root,
+        "spreadsheet_id": "spreadsheet-id",
+        "tabs": {
+            "imsgx": "iMsgX",
+            "downloads": "downloads",
+            "textifications": "textifications",
+            "translations": "translations",
+        },
+    }
+
+
+def pipeline_config(downloads_dir: Path, artifact_root: Path | None = None) -> PipelineConfig:
+    return PipelineConfig(
+        downloads_dir=downloads_dir,
+        artifact_root=artifact_root,
+        spreadsheet_id="spreadsheet-id",
+        tabs=pipeline_tabs_config(),
+    )
+
+
+def google_config(credentials_path: Path) -> GoogleConfig:
+    return GoogleConfig(
+        oauth_client_credentials_path=credentials_path,
+        authorized_user_keychain=KeychainLocator(
+            service="curio-google-authorized-user",
+            account="replace-with-macos-account",
+        ),
+    )
+
+
 def assert_default_translation_prompt_config(prompt_config: LlmCallerPromptConfig | None) -> None:
     assert prompt_config == LlmCallerPromptConfig(
         instructions=DEFAULT_TRANSLATION_INSTRUCTIONS,
@@ -60,8 +106,11 @@ def test_checked_in_codex_example_config_parses() -> None:
     assert config.translate_config == TranslateConfig(llm_caller="translator_codex_gpt_54_mini")
     assert config.textify_config == TextifyConfig(llm_caller="textifier_codex_gpt_54_mini")
     assert config.pipeline_config == PipelineConfig(
-        downloads_dir=(Path.home() / "Desktop/iMsgX/downloads").resolve(strict=False)
+        downloads_dir=(Path.home() / "Desktop/iMsgX/downloads").resolve(strict=False),
+        spreadsheet_id="replace-with-google-sheets-id",
+        tabs=pipeline_tabs_config(),
     )
+    assert config.google_config == google_config(repo_root() / "replace-with-google-oauth-client.json")
     assert config.pipeline_config.effective_artifact_root == (Path.home() / "Desktop/iMsgX").resolve(strict=False)
     assert caller_config.provider == ProviderName.CODEX_CLI
     assert caller_config.model == "gpt-5.5"
@@ -259,10 +308,8 @@ def test_load_config_parses_required_pipeline_config_and_overrides(
     config_dir.mkdir()
     config_path = config_dir / "config.json"
     payload = json.loads((repo_root() / "config.example.openai_api.json").read_text(encoding="utf-8"))
-    payload["pipeline"] = {
-        "downloads_dir": "relative-downloads",
-        "artifact_root": "../curio-artifacts",
-    }
+    payload["pipeline"] = pipeline_payload("relative-downloads", "../curio-artifacts")
+    payload["google"]["oauth_client_credentials_path"] = "../google-oauth-client.json"
     write_config(config_path, payload)
 
     config = load_config(config_path)
@@ -270,11 +317,9 @@ def test_load_config_parses_required_pipeline_config_and_overrides(
     assert config.pipeline_config.downloads_dir == config_dir / "relative-downloads"
     assert config.pipeline_config.artifact_root == tmp_path / "curio-artifacts"
     assert config.pipeline_config.effective_artifact_root == tmp_path / "curio-artifacts"
+    assert config.google_config.oauth_client_credentials_path == tmp_path / "google-oauth-client.json"
 
-    payload["pipeline"] = {
-        "downloads_dir": str(tmp_path / "absolute-downloads"),
-        "artifact_root": str(tmp_path / "absolute-artifacts"),
-    }
+    payload["pipeline"] = pipeline_payload(str(tmp_path / "absolute-downloads"), str(tmp_path / "absolute-artifacts"))
     write_config(config_path, payload)
 
     config = load_config(config_path)
@@ -285,16 +330,15 @@ def test_load_config_parses_required_pipeline_config_and_overrides(
     home_dir = tmp_path / "home"
     home_dir.mkdir()
     monkeypatch.setenv("HOME", str(home_dir))
-    payload["pipeline"] = {
-        "downloads_dir": "~/imsgx/downloads",
-        "artifact_root": "~/curio-artifacts",
-    }
+    payload["pipeline"] = pipeline_payload("~/imsgx/downloads", "~/curio-artifacts")
+    payload["google"]["oauth_client_credentials_path"] = "~/google-oauth-client.json"
     write_config(config_path, payload)
 
     config = load_config(config_path)
 
     assert config.pipeline_config.downloads_dir == home_dir / "imsgx/downloads"
     assert config.pipeline_config.artifact_root == home_dir / "curio-artifacts"
+    assert config.google_config.oauth_client_credentials_path == home_dir / "google-oauth-client.json"
 
 
 def test_load_config_resolves_relative_config_path_from_current_directory(
@@ -305,7 +349,7 @@ def test_load_config_resolves_relative_config_path_from_current_directory(
     nested.mkdir()
     config_path = nested / "curio.json"
     payload = json.loads((repo_root() / "config.example.openai_api.json").read_text(encoding="utf-8"))
-    payload["pipeline"] = {"downloads_dir": "downloads", "artifact_root": None}
+    payload["pipeline"] = pipeline_payload("downloads", None)
     write_config(config_path, payload)
     monkeypatch.chdir(tmp_path)
 
@@ -329,22 +373,80 @@ def test_load_config_rejects_invalid_pipeline_config(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="pipeline"):
         load_config(config_path)
 
-    payload["pipeline"] = {"downloads_dir": "", "artifact_root": None}
+    payload["pipeline"] = pipeline_payload("", None)
     write_config(config_path, payload)
     with pytest.raises(ConfigError, match="pipeline.downloads_dir"):
         load_config(config_path)
 
-    payload["pipeline"] = {"downloads_dir": "downloads", "artifact_root": 3}
+    payload["pipeline"] = pipeline_payload("downloads", None)
+    del payload["pipeline"]["spreadsheet_id"]
+    write_config(config_path, payload)
+    with pytest.raises(ConfigError, match="pipeline.spreadsheet_id"):
+        load_config(config_path)
+
+    payload["pipeline"] = pipeline_payload("downloads", None)
+    del payload["pipeline"]["tabs"]
+    write_config(config_path, payload)
+    with pytest.raises(ConfigError, match="pipeline.tabs"):
+        load_config(config_path)
+
+    payload["pipeline"] = pipeline_payload("downloads", None)
+    cast(dict[str, object], payload["pipeline"])["artifact_root"] = 3
     write_config(config_path, payload)
     with pytest.raises(ConfigError, match="pipeline.artifact_root"):
         load_config(config_path)
 
     with pytest.raises(ConfigError, match="PipelineConfig"):
-        CurioConfig(llm_callers={}, pipeline_config="bad")
+        CurioConfig(llm_callers={}, google_config=google_config(tmp_path / "client.json"), pipeline_config="bad")
     with pytest.raises(ConfigError, match="pipeline.downloads_dir"):
-        PipelineConfig(downloads_dir="bad")  # type: ignore[arg-type]
+        PipelineConfig(downloads_dir="bad", spreadsheet_id="spreadsheet-id", tabs=pipeline_tabs_config())  # type: ignore[arg-type]
+    with pytest.raises(ConfigError, match="pipeline.tabs"):
+        PipelineConfig(downloads_dir=tmp_path / "downloads", spreadsheet_id="spreadsheet-id", tabs="bad")  # type: ignore[arg-type]
     with pytest.raises(ConfigError, match="pipeline.artifact_root"):
-        PipelineConfig(downloads_dir=tmp_path / "downloads", artifact_root="bad")  # type: ignore[arg-type]
+        PipelineConfig(
+            downloads_dir=tmp_path / "downloads",
+            artifact_root="bad",  # type: ignore[arg-type]
+            spreadsheet_id="spreadsheet-id",
+            tabs=pipeline_tabs_config(),
+        )
+
+
+def test_load_config_rejects_invalid_google_config(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    payload = json.loads((repo_root() / "config.example.codex_cli.json").read_text(encoding="utf-8"))
+
+    del payload["google"]
+    write_config(config_path, payload)
+    with pytest.raises(ConfigError, match="google"):
+        load_config(config_path)
+
+    payload["google"] = "bad"
+    write_config(config_path, payload)
+    with pytest.raises(ConfigError, match="google"):
+        load_config(config_path)
+
+    payload["google"] = {
+        "oauth_client_credentials_path": "",
+        "authorized_user_keychain": {"service": "service", "account": "account"},
+    }
+    write_config(config_path, payload)
+    with pytest.raises(ConfigError, match="google.oauth_client_credentials_path"):
+        load_config(config_path)
+
+    payload["google"] = {
+        "oauth_client_credentials_path": "client.json",
+        "authorized_user_keychain": {"service": "", "account": "account"},
+    }
+    write_config(config_path, payload)
+    with pytest.raises(ConfigError, match="google.authorized_user_keychain.service"):
+        load_config(config_path)
+
+    with pytest.raises(ConfigError, match="GoogleConfig"):
+        CurioConfig(llm_callers={}, google_config="bad", pipeline_config=pipeline_config(tmp_path / "downloads"))  # type: ignore[arg-type]
+    with pytest.raises(ConfigError, match="google.oauth_client_credentials_path"):
+        GoogleConfig(oauth_client_credentials_path="bad", authorized_user_keychain=KeychainLocator("svc", "acct"))  # type: ignore[arg-type]
+    with pytest.raises(ConfigError, match="google.authorized_user_keychain"):
+        GoogleConfig(oauth_client_credentials_path=tmp_path / "client.json", authorized_user_keychain="bad")  # type: ignore[arg-type]
 
 
 def test_load_config_accepts_omitted_llm_caller_pricing(tmp_path: Path) -> None:
@@ -380,7 +482,8 @@ def test_load_config_rejects_invalid_translate_config(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="TranslateConfig"):
         CurioConfig(
             llm_callers={},
-            pipeline_config=PipelineConfig(downloads_dir=tmp_path / "downloads"),
+            google_config=google_config(tmp_path / "client.json"),
+            pipeline_config=pipeline_config(tmp_path / "downloads"),
             translate_config="bad",
         )
 
@@ -403,7 +506,8 @@ def test_load_config_rejects_invalid_translate_config(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="TextifyConfig"):
         CurioConfig(
             llm_callers={},
-            pipeline_config=PipelineConfig(downloads_dir=tmp_path / "downloads"),
+            google_config=google_config(tmp_path / "client.json"),
+            pipeline_config=pipeline_config(tmp_path / "downloads"),
             textify_config="bad",
         )
 

@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
@@ -25,6 +25,11 @@ class ProcessorRunStatus(StrEnum):
     FAILED = "failed"
 
 
+PROGRESSING_PROCESSOR_RUN_STATUSES: Final = frozenset(
+    {ProcessorRunStatus.RECORDED, ProcessorRunStatus.FAILED}
+)
+
+
 @dataclass(frozen=True, slots=True)
 class ProcessorRunResult:
     stage: str
@@ -34,6 +39,9 @@ class ProcessorRunResult:
     existing_record: ProcessRecord | None = None
 
 
+PipelineProgressCallback = Callable[[ProcessorRunResult], None]
+
+
 @dataclass(frozen=True, slots=True)
 class PipelineRunResult:
     iterations: int
@@ -41,7 +49,7 @@ class PipelineRunResult:
 
     @property
     def made_progress(self) -> bool:
-        return any(result.status in {ProcessorRunStatus.RECORDED, ProcessorRunStatus.FAILED} for result in self.processor_results)
+        return any(result.status in PROGRESSING_PROCESSOR_RUN_STATUSES for result in self.processor_results)
 
 
 def run_processor_once(
@@ -90,7 +98,12 @@ def run_processor_once(
 
         outcome = processor.process(candidate)
         persisted = processor.persist(candidate, outcome, artifacts)
-        record = processor.record(candidate, persisted, store)
+        try:
+            record = processor.record(candidate, persisted, store)
+        except Exception:
+            if persisted.object_ is not None:
+                artifacts.discard_object(persisted.object_)
+            raise
         return ProcessorRunResult(
             stage=processor.stage,
             status=ProcessorRunStatus.RECORDED,
@@ -113,6 +126,7 @@ def run_stage(
     store: PipelineStore,
     artifacts: ArtifactStore,
     limit: int,
+    progress_callback: PipelineProgressCallback | None = None,
 ) -> PipelineRunResult:
     if limit < 1:
         raise ValueError("limit must be a positive integer")
@@ -121,10 +135,11 @@ def run_stage(
     for _ in range(limit):
         result = run_processor_once(processor, store=store, artifacts=artifacts)
         results.append(result)
-        if result.status not in {ProcessorRunStatus.RECORDED, ProcessorRunStatus.FAILED}:
+        _notify_progress(progress_callback, result)
+        if result.status not in PROGRESSING_PROCESSOR_RUN_STATUSES:
             break
     return PipelineRunResult(
-        iterations=sum(result.status in {ProcessorRunStatus.RECORDED, ProcessorRunStatus.FAILED} for result in results),
+        iterations=sum(result.status in PROGRESSING_PROCESSOR_RUN_STATUSES for result in results),
         processor_results=tuple(results),
     )
 
@@ -135,6 +150,7 @@ def run_artifact_through(
     store: PipelineStore,
     artifacts: ArtifactStore,
     limit: int,
+    progress_callback: PipelineProgressCallback | None = None,
 ) -> PipelineRunResult:
     if not processors:
         raise ValueError("processors must not be empty")
@@ -151,11 +167,20 @@ def run_artifact_through(
             result = run_processor_once(processor, store=store, artifacts=artifacts)
             results.append(result)
             iteration_results.append(result)
-        if not any(result.status in {ProcessorRunStatus.RECORDED, ProcessorRunStatus.FAILED} for result in iteration_results):
+            _notify_progress(progress_callback, result)
+        if not any(result.status in PROGRESSING_PROCESSOR_RUN_STATUSES for result in iteration_results):
             break
         iterations += 1
 
     return PipelineRunResult(iterations=iterations, processor_results=tuple(results))
+
+
+def _notify_progress(
+    progress_callback: PipelineProgressCallback | None,
+    result: ProcessorRunResult,
+) -> None:
+    if progress_callback is not None:
+        progress_callback(result)
 
 
 def _validate_supported_processor(processor: Processor) -> None:

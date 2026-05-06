@@ -26,7 +26,9 @@ structured JSON request for one run.
 Pipeline commands also require explicit `pipeline` config. `downloads_dir`
 anchors local iMsgX artifacts, `artifact_root` controls Curio's local output
 folders when set, and `spreadsheet_id` plus `tabs` identify the Google Sheets
-ledger used by real pipeline runs.
+ledger used by real pipeline runs. The required top-level `google` config holds
+the OAuth desktop-client path and Keychain locator for the Google authorized-user
+token.
 
 Each named caller owns its provider, model, auth config, timeout, and
 provider-specific tuning. Translator callers in the example configs also define
@@ -279,10 +281,12 @@ make textify ARTIFACT="imsgx-r0057-x1-image-2039077799643005198-photo-1.png"
 make textify-genius ARTIFACT="imsgx-r0057-x1-image-2039077799643005198-photo-1.png"
 ```
 
-Pipeline commands currently expose the intended operator controls but still
-return a reserved-command error until the real downloads/local ledger adapter is
-implemented. They are safe help/shape checks and do not touch live Google
-Sheets.
+Targeted pipeline selectors now run read-only previews against the configured
+Google Sheet. They may read live sheet state, but they do not append rows,
+persist artifacts, call providers, or initialize empty processor-tab headers.
+Append-capable `pipeline run-stage --persist` commands execute the selected
+processor. Full `pipeline run --persist` remains reserved until the next
+pipeline checkpoint.
 
 Append-capable pipeline commands are deliberately narrow. A next-available sweep
 requires `--persist`; without it, Curio must fail before mutating anything. The
@@ -296,12 +300,34 @@ uv run python -m curio pipeline run-stage textify --persist
 make pipeline-run-stage STAGE=textify PERSIST=1
 ```
 
+Mutating run-stage output includes a `detail` column. For a recorded `failed`
+row, `detail` shows the exception type and message from that run.
+
 Append the next 25 translation candidates:
 
 ```bash
 uv run python -m curio pipeline run-stage translate --limit 25 --persist
 make pipeline-run-stage STAGE=translate LIMIT=25 PERSIST=1
 ```
+
+For `already_text` inputs, translation reads the deterministic local iMsgX
+download artifact when available and extracts the text payload from that file.
+It does not translate the downloads row URL/source value.
+
+For Tweet JSON that wraps an article, Curio extracts article text before wrapper
+URL text. A wrapper `lang` value such as `zxx` is not used as the language hint
+for article-derived text.
+
+Skipped/no-op outcomes such as `already_english`, and failed outcomes, do not
+write local artifacts. The processor sheet row is the record for those cases.
+If a local artifact is created but the sheet append fails, Curio discards the
+artifact from that current attempt before recording or surfacing the failure.
+Known unsupported textify media, including video inputs, are recorded as
+`unsupported` without requiring a local artifact path.
+
+Current executable pipeline commands use the local artifact store. A
+Google Drive-backed artifact store is tracked as the next pipeline storage
+checkpoint so `Object` cells can hold Drive URLs for cross-machine access.
 
 This next-available sweep refuses to run because it could append rows without
 the explicit mutation gate:
@@ -310,15 +336,23 @@ the explicit mutation gate:
 uv run python -m curio pipeline run-stage textify
 ```
 
+Full-pipeline append execution is still reserved:
+
+```bash
+uv run python -m curio pipeline run --persist
+```
+
 Targeted row/date/source selectors are inspection-only. They do not append rows,
 persist artifacts, or call providers:
 
 ```bash
 uv run python -m curio pipeline run-stage textify --row 25
 uv run python -m curio pipeline run-stage textify --source "x://post/123"
+uv run python -m curio pipeline run --row 25
 uv run python -m curio pipeline doctor --from-row 10 --to-row 25 --json
 make pipeline-run-stage STAGE=textify ROW=25
 make pipeline-run-stage STAGE=textify SOURCE="x://post/123"
+make pipeline-run ROW=25
 make pipeline-doctor FROM_ROW=10 TO_ROW=25 JSON=1
 ```
 

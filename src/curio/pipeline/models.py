@@ -32,6 +32,13 @@ class TranslateProcessStatus(StrEnum):
     FAILED = "failed"
 
 
+class PipelinePreviewAction(StrEnum):
+    WOULD_PROCESS = "would_process"
+    ALREADY_RECORDED = "already_recorded"
+    WAITING_FOR_INPUT = "waiting_for_input"
+    BLOCKED = "blocked"
+
+
 def _require_string(value: object, field_name: str) -> str:
     if not isinstance(value, str):
         raise ValueError(f"{field_name} must be a string")
@@ -229,6 +236,43 @@ class ProcessCandidate:
             "source": self.source,
             "artifact_key": self.artifact_key,
             "metadata": dict(self.metadata),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PipelinePreviewItem:
+    stage: str
+    downloads_row: int | None
+    source: str
+    input_ref: ProcessRef | None
+    action: PipelinePreviewAction | str
+    reason: str
+    existing_record_ref: ProcessRef | None = None
+    existing_status: str | None = None
+
+    def __post_init__(self) -> None:
+        _require_string(self.stage, "stage")
+        _require_optional_positive_int(self.downloads_row, "downloads_row")
+        _require_string(self.source, "source")
+        if self.input_ref is not None and not isinstance(self.input_ref, ProcessRef):
+            raise ValueError("input_ref must be a ProcessRef")
+        object.__setattr__(self, "action", PipelinePreviewAction(self.action))
+        _require_string(self.reason, "reason")
+        if self.existing_record_ref is not None and not isinstance(self.existing_record_ref, ProcessRef):
+            raise ValueError("existing_record_ref must be a ProcessRef")
+        _require_optional_string(self.existing_status, "existing_status")
+
+    def to_json(self) -> JsonObject:
+        action = cast(PipelinePreviewAction, self.action)
+        return {
+            "stage": self.stage,
+            "downloads_row": self.downloads_row,
+            "source": self.source,
+            "input_ref": None if self.input_ref is None else self.input_ref.to_json(),
+            "action": action.value,
+            "reason": self.reason,
+            "existing_record_ref": None if self.existing_record_ref is None else self.existing_record_ref.to_json(),
+            "existing_status": self.existing_status,
         }
 
 
@@ -441,6 +485,8 @@ class ArtifactStore(Protocol):
         candidate: ProcessCandidate,
         object_: ProcessorObject,
     ) -> ArtifactRef: ...
+
+    def discard_object(self, ref: ArtifactRef) -> None: ...
 
 
 class Processor(ABC):

@@ -3,7 +3,14 @@ from pathlib import Path
 
 import pytest
 
-from curio.config import CurioConfig, LlmCallerConfig, PipelineConfig
+from curio.config import (
+    CurioConfig,
+    GoogleConfig,
+    KeychainLocator,
+    LlmCallerConfig,
+    PipelineConfig,
+    PipelineTabsConfig,
+)
 from curio.llm_caller import (
     CodexCliAuthConfig,
     CodexCliClient,
@@ -73,9 +80,30 @@ def make_secret_store() -> InMemorySecretStore:
     return store
 
 
+def make_pipeline_config(downloads_dir: Path) -> PipelineConfig:
+    return PipelineConfig(
+        downloads_dir=downloads_dir,
+        spreadsheet_id="spreadsheet-id",
+        tabs=PipelineTabsConfig(
+            imsgx="iMsgX",
+            downloads="downloads",
+            textifications="textifications",
+            translations="translations",
+        ),
+    )
+
+
+def make_google_config() -> GoogleConfig:
+    return GoogleConfig(
+        oauth_client_credentials_path=Path("google-oauth-client.json"),
+        authorized_user_keychain=KeychainLocator(service="svc", account="acct"),
+    )
+
+
 def make_config() -> CurioConfig:
     return CurioConfig(
-        pipeline_config=PipelineConfig(downloads_dir=Path("downloads")),
+        google_config=make_google_config(),
+        pipeline_config=make_pipeline_config(Path("downloads")),
         llm_callers={
             "translator_codex_gpt_55": LlmCallerConfig(
                 name="translator_codex_gpt_55",
@@ -247,8 +275,8 @@ def test_build_llm_caller_client_requires_explicit_config_and_dependencies(tmp_p
 
 
 def test_llm_caller_factory_rejects_missing_or_mismatched_caller_config(tmp_path) -> None:
-    pipeline_config = PipelineConfig(downloads_dir=tmp_path / "downloads")
-    empty_config = CurioConfig(llm_callers={}, pipeline_config=pipeline_config)
+    pipeline_config = make_pipeline_config(tmp_path / "downloads")
+    empty_config = CurioConfig(llm_callers={}, google_config=make_google_config(), pipeline_config=pipeline_config)
     factory = LlmCallerFactory(
         config=empty_config,
         secret_store=make_secret_store(),
@@ -260,6 +288,7 @@ def test_llm_caller_factory_rejects_missing_or_mismatched_caller_config(tmp_path
         factory.create("translator_codex_gpt_55")
 
     mismatched_codex = CurioConfig(
+        google_config=make_google_config(),
         pipeline_config=pipeline_config,
         llm_callers={
             "bad_codex": LlmCallerConfig(
@@ -282,6 +311,7 @@ def test_llm_caller_factory_rejects_missing_or_mismatched_caller_config(tmp_path
         ).create("bad_codex")
 
     missing_codex_exec = CurioConfig(
+        google_config=make_google_config(),
         pipeline_config=pipeline_config,
         llm_callers={
             "bad_codex": LlmCallerConfig(
@@ -303,6 +333,7 @@ def test_llm_caller_factory_rejects_missing_or_mismatched_caller_config(tmp_path
         ).create("bad_codex")
 
     mismatched_openai = CurioConfig(
+        google_config=make_google_config(),
         pipeline_config=pipeline_config,
         llm_callers={
             "bad_openai": LlmCallerConfig(
@@ -324,6 +355,7 @@ def test_llm_caller_factory_rejects_missing_or_mismatched_caller_config(tmp_path
         ).create("bad_openai")
 
     mismatched_google = CurioConfig(
+        google_config=make_google_config(),
         pipeline_config=pipeline_config,
         llm_callers={
             "bad_google": LlmCallerConfig(

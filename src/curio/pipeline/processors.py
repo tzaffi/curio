@@ -29,6 +29,7 @@ from curio.textify import (
     TextifyResponse,
     TextifySource,
     TextifyStatus,
+    normalize_mime_type,
 )
 from curio.translate import (
     DEFAULT_ENGLISH_CONFIDENCE_THRESHOLD,
@@ -40,6 +41,7 @@ from curio.translate import (
 
 TEXTIFY_PROCESSOR_VERSION = "curio-textify-processor.v1"
 TRANSLATE_PROCESSOR_VERSION = "curio-translate-processor.v1"
+UNSUPPORTED_TEXTIFY_VIDEO_EXTENSIONS = frozenset((".3gp", ".avi", ".m4v", ".mkv", ".mov", ".mp4", ".mpeg", ".mpg", ".webm"))
 
 
 class TextifyServiceBoundary(Protocol):
@@ -62,6 +64,16 @@ class TextifyProcessor(Processor):
         return store.next_candidate(self.stage)
 
     def eligibility(self, candidate: ProcessCandidate) -> Eligibility:
+        unsupported_reason = _known_unsupported_textify_reason(candidate)
+        if unsupported_reason is not None:
+            return Eligibility(
+                eligible=False,
+                status=TextifyProcessStatus.UNSUPPORTED.value,
+                metadata={
+                    "textify_status": TextifyStatus.UNSUPPORTED_MEDIA.value,
+                    "warnings": [unsupported_reason],
+                },
+            )
         return Eligibility(eligible=True, status=TextifyProcessStatus.CONVERTED.value)
 
     def process(self, candidate: ProcessCandidate) -> ProcessOutcome:
@@ -228,6 +240,42 @@ def _textify_request_from_candidate(candidate: ProcessCandidate) -> TextifyReque
         or DEFAULT_TEXTIFY_OUTPUT_FORMAT,
         llm_caller=_metadata_string(metadata, "llm_caller"),
     )
+
+
+def _known_unsupported_textify_reason(candidate: ProcessCandidate) -> str | None:
+    metadata = candidate.metadata
+    mime_type = _metadata_string(metadata, "mime_type")
+    if mime_type is not None and (normalize_mime_type(mime_type) or "").startswith("video/"):
+        return "unsupported media type for textify v1: video"
+    for field_name in ("type", "column"):
+        value = _metadata_string(metadata, field_name)
+        if value is not None and value.strip().casefold() == "video":
+            return "unsupported media type for textify v1: video"
+    if any(_looks_like_video_resource(value) for value in _candidate_textify_identity_values(candidate)):
+        return "unsupported media type for textify v1: video"
+    return None
+
+
+def _candidate_textify_identity_values(candidate: ProcessCandidate) -> tuple[str, ...]:
+    metadata = candidate.metadata
+    values = [
+        candidate.source,
+        candidate.artifact_key,
+        candidate.source_ref.source,
+        candidate.source_ref.artifact_url,
+        candidate.source_ref.artifact_path,
+    ]
+    for field_name in ("source", "object", "path", "name"):
+        value = _metadata_string(metadata, field_name)
+        if value is not None:
+            values.append(value)
+    return tuple(value for value in values if value)
+
+
+def _looks_like_video_resource(value: str) -> bool:
+    normalized = value.strip().casefold()
+    resource = normalized.split("?", 1)[0].split("#", 1)[0]
+    return "/video/" in resource or any(resource.endswith(extension) for extension in UNSUPPORTED_TEXTIFY_VIDEO_EXTENSIONS)
 
 
 def _translation_request_from_candidate(candidate: ProcessCandidate) -> TranslationRequest:

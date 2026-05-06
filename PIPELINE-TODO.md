@@ -442,11 +442,13 @@ Current implementation state:
 
 - Pure contracts, fake stores, processor wrappers, scheduler helpers, and local
   artifact persistence exist for `textify` and `translate`.
-- The `curio pipeline` command group is reserved and exposes the intended
-  operator controls, but it does not execute processors yet.
+- The `curio pipeline` command group exposes the intended operator controls.
+  Targeted previews execute against the configured Google Sheets store, and
+  append-capable `run-stage` execution exists for `textify` and `translate`.
+  Full-pipeline append execution is still reserved pending Checkpoint 6D.
 - Candidate selection from configured Google Sheets `iMsgX` / `downloads` data
-  is not implemented.
-- Non-persisting preview output is specified but not implemented.
+  is implemented for `textify` and `translate`.
+- Non-persisting targeted preview output is implemented.
 - CLI-level integration tests are still missing meaningful execution coverage.
 
 [lock] [x] **Checkpoint 2: Pure pipeline contracts**
@@ -516,7 +518,7 @@ Current implementation state:
 - ~~Add Google Drive artifact adapter behind `ArtifactStore`.~~ (PUNTED)
 - [test] Gate: `make check`, 100% coverage passed.
 
-[lock] [ ] **Checkpoint 5B: Google Sheets pipeline store**
+[lock] [x] **Checkpoint 5B: Google Sheets pipeline store**
 
 - Add a real Google Sheets-backed store behind `PipelineStore`.
 - Extend required pipeline config with the spreadsheet/workbook identity and
@@ -590,11 +592,12 @@ Current implementation state:
 - Row controls are inspection-only input filters over upstream iMsgX `downloads`
   rows. Processor-owned tabs remain append-only and write to the first
   available row.
-- Commands still fail clearly as reserved; they do not run processors yet.
+- At the 6A boundary, append-capable command forms failed clearly as reserved;
+  Checkpoint 6C supersedes this for `run-stage textify|translate --persist`.
 - ~~CLI should run dossier/evaluate stages.~~ (PUNTED)
 - [test] Gate for reserved command group: `make check`, 100% coverage passed.
 
-[lock] [ ] **Checkpoint 6B: Preview planner and renderer**
+[lock] [x] **Checkpoint 6B: Preview planner and renderer**
 
 - Implement non-persisting preview mode for targeted selectors.
 - Preview commands must not:
@@ -611,9 +614,18 @@ Current implementation state:
   - reason
 - Render JSON output only for non-mutating previews and diagnostics.
 - Reject `--persist` when any targeted row/date/source selector is present.
+- Implemented targeted previews for:
+  - `curio pipeline run`
+  - `curio pipeline run-stage`
+  - `curio pipeline doctor`
+- Previews use the configured Google Sheets pipeline store and read live sheet
+  state without appending rows or invoking processor services.
+- Empty Curio-owned processor tabs are treated as empty ledgers for preview.
+  Preview does not initialize missing headers because it must not mutate Google
+  Sheets.
 - [test] Gate: `make check`, 100% coverage passed.
 
-[lock] [ ] **Checkpoint 6C: Executable `run-stage`**
+[lock] [x] **Checkpoint 6C: Executable `run-stage`**
 
 - Implement `curio pipeline run-stage textify --persist`.
 - Implement `curio pipeline run-stage translate --persist`.
@@ -626,13 +638,56 @@ Current implementation state:
   candidates.
 - Require `--persist` for next-available append sweeps.
 - Append processor rows to the first available row in the processor-owned tab.
+- Initialize an empty Curio-owned processor tab header immediately before the
+  first append to that tab. Do not initialize headers from preview paths.
+- Render recorded failure details in the mutating CLI output so operators can
+  see the exception type and message without inspecting process internals.
+- For `already_text` inputs, translate extracts text from the deterministic
+  local iMsgX download artifact when available, rather than translating the
+  downloads URL/source value.
+- For article-wrapping Tweet JSON, `already_text` extraction prefers
+  `article.plain_text` or `article.title`/`article.preview_text` over the
+  wrapper `text` URL, and does not use wrapper `lang: zxx` as an article text
+  language hint.
+- Skipped/no-op outcomes and failed outcomes do not create local artifacts;
+  the processor ledger row is the record for these cases.
+- Artifacts created during the current attempt are discarded if processor row
+  append fails after artifact persistence.
+- Known unsupported textify media, including video inputs, append
+  `unsupported` before `TextifyRequest` construction; missing local video
+  artifact paths are not `failed` outcomes.
 - Never use CLI row options as output row positions.
 - Stop at the requested limit or first unrecoverable runtime failure.
 - Real commands must not use fake stores, fake services, or offline fixture
   substitutes. Fakes belong only in tests.
+- [test] Fake-boundary CLI tests cover executable `run-stage` without touching
+  live Google Sheets, Google Drive, or live providers.
 - [test] Gate: `make check`, 100% coverage passed.
 
-[lock] [ ] **Checkpoint 6D: Executable full `run`**
+[lock] [ ] **Checkpoint 6D: Google Drive artifact store**
+
+- Add a Google Drive-backed `ArtifactStore` for object-creating `textify` and
+  `translate` outcomes.
+- Keep `LocalArtifactStore` available for offline tests and local-only runs, but
+  make Drive-backed artifacts the shared-machine option.
+- Extend config with explicit artifact store selection and Drive folder
+  identity for `textifications` and `translations`.
+- Reuse Curio's direct Google REST/OAuth/keychain implementation style.
+- Request the minimum Drive OAuth scope needed to create and update Curio-owned
+  artifact files.
+- Upload deterministic JSON envelopes with the same iMsgX-style filenames used
+  by the local store.
+- Write Drive URLs, not local paths, to processor sheet `Object` cells when the
+  Drive store is selected.
+- Preserve the no-sentinel rule: skipped/no-op and failed outcomes do not
+  create Drive files.
+- Delete files created during the current attempt if the processor sheet append
+  fails after Drive upload.
+- [test] Fake HTTP tests cover upload, idempotent same-content reuse, changed
+  content rejection, and rollback without touching live Google Drive.
+- [test] Gate: `make check`, 100% coverage passed.
+
+[lock] [ ] **Checkpoint 6E: Executable full `run`**
 
 - Implement `curio pipeline run --persist` as the full current-scope pipeline.
 - `run` means artifact-through execution for all in-scope processors:
@@ -706,7 +761,6 @@ of scope while this implementation pass is limited to `textify` and `translate`.
 - Add or specify `EvaluateProcessor`.
 - Wrap an evaluation service if one exists.
 - Implement or defer evaluation service explicitly if one does not exist.
-- Add Google Drive artifact adapter behind `ArtifactStore`.
 - Support unsupported media skipping evaluation.
 - Verify evaluation consumes the dossier snapshot, not stale intermediate text.
 - Add opt-in live pipeline smoke harness.

@@ -8,6 +8,8 @@ from curio.pipeline import (
     Eligibility,
     LedgerTab,
     PersistedOutcome,
+    PipelinePreviewAction,
+    PipelinePreviewItem,
     PipelineStage,
     ProcessCandidate,
     Processor,
@@ -73,6 +75,8 @@ def test_pipeline_root_exports_contracts() -> None:
         "ArtifactStore",
         "Eligibility",
         "LedgerTab",
+        "PipelinePreviewAction",
+        "PipelinePreviewItem",
         "PipelineStage",
         "PipelineStore",
         "PersistedOutcome",
@@ -84,10 +88,16 @@ def test_pipeline_root_exports_contracts() -> None:
         "ProcessorObject",
         "InMemoryArtifactStore",
         "InMemoryPipelineStore",
+        "GoogleSheetsClient",
+        "GoogleSheetsPipelineStore",
+        "GoogleSheetsPipelineStoreError",
         "LocalArtifactStore",
+        "PipelineSelector",
         "PipelineRunResult",
+        "PipelineProgressCallback",
         "ProcessorRunResult",
         "ProcessorRunStatus",
+        "PROGRESSING_PROCESSOR_RUN_STATUSES",
         "TEXTIFY_PROCESSOR_VERSION",
         "TRANSLATE_PROCESSOR_VERSION",
         "TextifyProcessor",
@@ -125,6 +135,57 @@ def test_process_ref_serializes_and_validates_identity() -> None:
         ProcessRef(stage="download", tab="downloads", source="source", row_number=0)
     with pytest.raises(ValueError, match="stage is required"):
         ProcessRef.from_json({"tab": "downloads", "source": "source"})
+
+
+def test_pipeline_preview_item_serializes_plan_shape() -> None:
+    item = PipelinePreviewItem(
+        stage=PipelineStage.TEXTIFY.value,
+        downloads_row=7,
+        source="x://post/123",
+        input_ref=make_download_ref(),
+        action=PipelinePreviewAction.WOULD_PROCESS,
+        reason="no existing row",
+    )
+
+    payload = item.to_json()
+
+    assert payload["stage"] == "textify"
+    assert payload["downloads_row"] == 7
+    assert payload["source"] == "x://post/123"
+    assert payload["input_ref"] == make_download_ref().to_json()
+    assert payload["action"] == "would_process"
+    assert payload["reason"] == "no existing row"
+    assert payload["existing_record_ref"] is None
+    assert payload["existing_status"] is None
+
+    with pytest.raises(ValueError, match="input_ref must be a ProcessRef"):
+        PipelinePreviewItem(
+            stage=PipelineStage.TEXTIFY.value,
+            downloads_row=7,
+            source="x://post/123",
+            input_ref="bad",  # type: ignore[arg-type]
+            action=PipelinePreviewAction.WOULD_PROCESS,
+            reason="no existing row",
+        )
+    with pytest.raises(ValueError, match="is not a valid PipelinePreviewAction"):
+        PipelinePreviewItem(
+            stage=PipelineStage.TEXTIFY.value,
+            downloads_row=7,
+            source="x://post/123",
+            input_ref=None,
+            action="bad-action",
+            reason="no existing row",
+        )
+    with pytest.raises(ValueError, match="existing_record_ref must be a ProcessRef"):
+        PipelinePreviewItem(
+            stage=PipelineStage.TEXTIFY.value,
+            downloads_row=7,
+            source="x://post/123",
+            input_ref=None,
+            action=PipelinePreviewAction.ALREADY_RECORDED,
+            reason="existing row",
+            existing_record_ref="bad",  # type: ignore[arg-type]
+        )
 
 
 def test_artifact_ref_serializes_lineage() -> None:

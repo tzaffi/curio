@@ -390,7 +390,7 @@ processor versions, caller names, and artifact refs are enough.
 
 Preparation processor tabs are operator ledgers, not debug databases. They
 should contain only identity, immediate lineage, stage outcome, and the created
-Google Drive object link.
+artifact link.
 
 Visible row detail belongs in [SCHEMA.md](SCHEMA.md). The intended v1 shape is:
 
@@ -402,8 +402,10 @@ Use one specific `Status` column. Do not add visible `Reason`, `Warnings`,
 processor, model, cost, row-number, or version columns to these preparation
 tabs.
 
-`Object` links to the Google Drive object created by that processor in its own
-folder. It is blank when the processor did not create an object.
+`Object` links to the artifact created by that processor in its own folder. For
+the local artifact store this is a local path; for the Google Drive artifact
+store this is a Drive URL. It is blank when the processor did not create an
+object.
 
 Detailed lineage, contributing rows, processor/model/cost metadata, warnings,
 hashes, and full text belong in the created JSON object.
@@ -636,13 +638,21 @@ and a new dossier snapshot before evaluation is retried.
 
 Each in-scope preparation processor owns an artifact folder with the same name
 as its processor tab. The initial implementation uses a local filesystem
-`ArtifactStore`; Google Drive remains an adapter behind the same boundary for a
-later pass. Curio must not hard-code a machine-specific artifact location.
+`ArtifactStore`; Google Drive is the intended shared-machine artifact store and
+should be implemented behind the same boundary. Curio must not hard-code a
+machine-specific artifact location.
 Runtime config must provide the upstream iMsgX downloads directory and the
 Google Sheets workbook used as the operational ledger:
 
 ```json
 {
+  "google": {
+    "oauth_client_credentials_path": "replace-with-google-oauth-client.json",
+    "authorized_user_keychain": {
+      "service": "curio-google-authorized-user",
+      "account": "replace-with-macos-account"
+    }
+  },
   "pipeline": {
     "downloads_dir": "~/Desktop/iMsgX/downloads",
     "artifact_root": null,
@@ -679,6 +689,12 @@ Required implementation choices:
 - validate that stored credentials cover the required scopes before reuse
 - refresh expired credentials and write refreshed credentials back to Keychain
 - validate exact sheet headers before reading or appending rows
+- treat empty Curio-owned processor tabs as empty ledgers, while still rejecting
+  non-empty tabs whose headers do not exactly match
+- keep upstream `iMsgX` and `downloads` tabs strict; empty or malformed upstream
+  headers are configuration errors
+- initialize an empty Curio-owned processor tab header only on the mutating
+  append path, immediately before appending the first processor row
 - append rows with `valueInputOption=RAW`
 - read spreadsheet metadata, including sheet gid values, so row refs can link to
   exact Google Sheets rows
@@ -778,6 +794,29 @@ the order of eligible text outputs emitted by `textify`, preserving the root
 `downloads` order. Failures append compact `failed` rows and count toward the
 limit for that run; default sweeps then continue to unrelated candidates.
 
+When a `textifications` row is `already_text`, `translate` should read the
+deterministic local iMsgX download artifact when available and extract its text
+payload. It should not translate the upstream URL or source identifier. The
+source artifact path and selected text field should be recorded in candidate
+metadata for debugging.
+
+For iMsgX Tweet JSON that wraps an article, article content wins over wrapper
+URL text. Extraction should prefer `article.plain_text`, then
+`article.title`/`article.preview_text`, before falling back to top-level
+`plain_text` or `text`. A wrapper-level `lang` such as `zxx` should not be used
+as the language hint for article-derived text.
+
+Skipped/no-op processor outcomes such as `already_text`, `unsupported`,
+`no_text`, and `already_english` must not create local artifacts. Failed
+processor outcomes must not create local artifacts either; the processor ledger
+row is the failure record. If an output artifact is created and the processor
+row append then fails, the artifact store must discard artifacts created during
+that current attempt before recording or surfacing the failure.
+
+Known unsupported textify media, including video inputs, should append an
+`unsupported` textification row before building a `TextifyRequest`. Missing
+local artifact paths for known unsupported media are not operational failures.
+
 Running a next-available sweep without `--persist` must fail before any provider
 call, artifact write, or row append. Targeted row/date/source filters are
 preview-only and must not be accepted with `--persist`.
@@ -790,8 +829,8 @@ available row.
 
 There is no `--dry-run` flag. Non-persisting variants are created by using a
 targeted selector such as `--row`, `--source`, `--start`, `--end`, `--from-row`,
-or `--to-row` on `run-stage` or `doctor`. A preview prints the matching plan and
-persists nothing:
+or `--to-row` on `run`, `run-stage`, or `doctor`. A preview prints the matching
+plan and persists nothing:
 
 - no processor rows are appended
 - no artifacts are written

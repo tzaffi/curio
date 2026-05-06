@@ -1,3 +1,9 @@
+from curio.pipeline.google_sheets import (
+    GoogleSheetsClient,
+    GoogleSheetsPipelineStore,
+    GoogleSheetsPipelineStoreError,
+    PipelineSelector,
+)
 from curio.pipeline.local import LocalArtifactStore
 from curio.pipeline.memory import InMemoryArtifactStore, InMemoryPipelineStore
 from curio.pipeline.models import (
@@ -6,6 +12,8 @@ from curio.pipeline.models import (
     Eligibility,
     LedgerTab,
     PersistedOutcome,
+    PipelinePreviewAction,
+    PipelinePreviewItem,
     PipelineStage,
     PipelineStore,
     ProcessCandidate,
@@ -24,6 +32,8 @@ from curio.pipeline.processors import (
     TranslateProcessor,
 )
 from curio.pipeline.scheduler import (
+    PROGRESSING_PROCESSOR_RUN_STATUSES,
+    PipelineProgressCallback,
     PipelineRunResult,
     ProcessorRunResult,
     ProcessorRunStatus,
@@ -37,6 +47,8 @@ __all__ = [
     "ArtifactStore",
     "Eligibility",
     "LedgerTab",
+    "PipelinePreviewAction",
+    "PipelinePreviewItem",
     "PipelineStage",
     "PipelineStore",
     "PersistedOutcome",
@@ -48,10 +60,16 @@ __all__ = [
     "ProcessorObject",
     "InMemoryArtifactStore",
     "InMemoryPipelineStore",
+    "GoogleSheetsClient",
+    "GoogleSheetsPipelineStore",
+    "GoogleSheetsPipelineStoreError",
     "LocalArtifactStore",
+    "PipelineSelector",
     "PipelineRunResult",
+    "PipelineProgressCallback",
     "ProcessorRunResult",
     "ProcessorRunStatus",
+    "PROGRESSING_PROCESSOR_RUN_STATUSES",
     "TEXTIFY_PROCESSOR_VERSION",
     "TRANSLATE_PROCESSOR_VERSION",
     "TextifyProcessor",

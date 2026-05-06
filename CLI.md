@@ -233,7 +233,7 @@ response JSON.
 The `pipeline` command group is the processor-led Curio workflow defined in
 [PIPELINE.md](PIPELINE.md).
 
-Reserved forms:
+Pipeline forms:
 
 ```text
 uv run python -m curio pipeline run [OPTIONS]
@@ -284,10 +284,16 @@ There is no source runner. `pipeline run` means the whole pipeline, and
 inside an explicit stage or diagnostic command. `pipeline doctor` is a
 non-mutating diagnostic command and may accept targeted selectors.
 
-Current implementation status: the option surface is reserved and visible in
-help. Actual pipeline execution remains blocked on the Google Sheets-backed
-pipeline store, so commands fail clearly rather than touching live Google
-Sheets.
+Current implementation status: targeted selector forms are implemented as
+read-only previews/diagnostics backed by the configured Google Sheet. They read
+sheet state and render a plan, but never append rows, write artifacts, or call
+providers. `pipeline run-stage textify --persist` and
+`pipeline run-stage translate --persist` execute the selected processor against
+the configured Google Sheet and local artifact store. Mutating run-stage output
+includes a `detail` column that renders the exception type and message when a
+processor records a `failed` row. Full
+`pipeline run --persist` remains reserved until the next executable pipeline
+checkpoint.
 
 ## `curate`
 

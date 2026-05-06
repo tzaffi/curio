@@ -3,7 +3,14 @@ from pathlib import Path
 
 import pytest
 
-from curio.config import CurioConfig, PipelineConfig, TranslateConfig
+from curio.config import (
+    CurioConfig,
+    GoogleConfig,
+    KeychainLocator,
+    PipelineConfig,
+    PipelineTabsConfig,
+    TranslateConfig,
+)
 from curio.llm_caller import (
     LlmOutput,
     LlmRequest,
@@ -34,6 +41,26 @@ from live_smoke_helpers import (
     usage_payload,
     write_smoke_artifacts,
 )
+
+
+def pipeline_config() -> PipelineConfig:
+    return PipelineConfig(
+        downloads_dir=repo_root() / "downloads",
+        spreadsheet_id="spreadsheet-id",
+        tabs=PipelineTabsConfig(
+            imsgx="iMsgX",
+            downloads="downloads",
+            textifications="textifications",
+            translations="translations",
+        ),
+    )
+
+
+def google_config() -> GoogleConfig:
+    return GoogleConfig(
+        oauth_client_credentials_path=repo_root() / "google-oauth-client.json",
+        authorized_user_keychain=KeychainLocator(service="svc", account="acct"),
+    )
 
 
 class RecordingLlmClient:
@@ -147,11 +174,25 @@ def test_select_codex_smoke_caller_reports_config_and_provider_errors(tmp_path: 
     config_path.write_text(
         json.dumps(
             {
-                "pipeline": {
-                    "downloads_dir": "downloads",
-                    "artifact_root": None,
-                },
-                "llm_callers": {
+                    "pipeline": {
+                        "downloads_dir": "downloads",
+                        "artifact_root": None,
+                        "spreadsheet_id": "spreadsheet-id",
+                        "tabs": {
+                            "imsgx": "iMsgX",
+                            "downloads": "downloads",
+                            "textifications": "textifications",
+                            "translations": "translations",
+                        },
+                    },
+                    "google": {
+                        "oauth_client_credentials_path": "google-oauth-client.json",
+                        "authorized_user_keychain": {
+                            "service": "svc",
+                            "account": "acct",
+                        },
+                    },
+                    "llm_callers": {
                     "translator_openai": {
                         "provider": "openai_api",
                         "model": "gpt-5.4-mini",
@@ -294,7 +335,8 @@ def test_redacted_caller_summary_includes_no_secret_values() -> None:
                 timeout_seconds=300,
             )
         },
-        pipeline_config=PipelineConfig(downloads_dir=repo_root() / "downloads"),
+        google_config=google_config(),
+        pipeline_config=pipeline_config(),
         translate_config=TranslateConfig(llm_caller="translator_openai"),
     ).llm_caller_config("translator_openai")
 

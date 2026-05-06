@@ -19,6 +19,7 @@ SLUG_RE = re.compile(r"[^a-z0-9]+")
 class LocalArtifactStore:
     def __init__(self, root: Path) -> None:
         self.root = root
+        self._created_paths: set[Path] = set()
 
     @classmethod
     def from_config(cls, config: PipelineConfig) -> Self:
@@ -49,7 +50,8 @@ class LocalArtifactStore:
         directory = self.root / ledger_tab
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / _artifact_filename(stage, candidate)
-        _write_new_or_matching_content(path, content)
+        if _write_new_or_matching_content(path, content):
+            self._created_paths.add(path)
         return ArtifactRef(
             kind=f"{stage}_object",
             mime_type=object_.mime_type,
@@ -59,6 +61,15 @@ class LocalArtifactStore:
             source_ref=candidate.source_ref,
             imsgx=candidate.imsgx,
         )
+
+    def discard_object(self, ref: ArtifactRef) -> None:
+        if ref.path is None:
+            return
+        path = Path(ref.path)
+        if path not in self._created_paths:
+            return
+        path.unlink(missing_ok=True)
+        self._created_paths.remove(path)
 
 
 def _artifact_filename(stage: str, candidate: ProcessCandidate) -> str:
@@ -87,9 +98,10 @@ def _slugify(value: str) -> str:
     return slug[:80].strip("-") if slug else "source"
 
 
-def _write_new_or_matching_content(path: Path, content: bytes) -> None:
+def _write_new_or_matching_content(path: Path, content: bytes) -> bool:
     if path.exists():
         if path.read_bytes() != content:
             raise FileExistsError(f"local artifact already exists with different content: {path}")
-        return
+        return False
     path.write_bytes(content)
+    return True

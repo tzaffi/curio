@@ -16,6 +16,13 @@
       "translations": "translations"
     }
   },
+  "google": {
+    "oauth_client_credentials_path": "replace-with-google-oauth-client.json",
+    "authorized_user_keychain": {
+      "service": "curio-google-authorized-user",
+      "account": "replace-with-macos-account"
+    }
+  },
   "llm_callers": {
     "translator_codex_gpt_55": {
       "provider": "codex_cli",

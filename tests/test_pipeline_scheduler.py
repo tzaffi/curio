@@ -4,8 +4,9 @@ from pathlib import Path
 import pytest
 
 import curio.pipeline as pipeline
-from curio.config import PipelineConfig
+from curio.config import PipelineConfig, PipelineTabsConfig
 from curio.pipeline import (
+    ArtifactRef,
     Eligibility,
     InMemoryArtifactStore,
     InMemoryPipelineStore,
@@ -163,6 +164,13 @@ class StageProcessor(Processor):
         return record
 
 
+class FailingConvertedAppendStore(InMemoryPipelineStore):
+    def append_record(self, record: ProcessRecord) -> ProcessRecord:
+        if record.status == TextifyProcessStatus.CONVERTED.value:
+            raise RuntimeError("record append exploded")
+        return super().append_record(record)
+
+
 class StaticExistingStore:
     def __init__(self, candidate: ProcessCandidate, record: ProcessRecord) -> None:
         self.candidate = candidate
@@ -196,6 +204,7 @@ def test_pipeline_root_exports_scheduler_contracts() -> None:
     assert "InMemoryArtifactStore" in pipeline.__all__
     assert "InMemoryPipelineStore" in pipeline.__all__
     assert "ProcessorRunStatus" in pipeline.__all__
+    assert "PROGRESSING_PROCESSOR_RUN_STATUSES" in pipeline.__all__
     assert "run_artifact_through" in pipeline.__all__
     assert "run_processor_once" in pipeline.__all__
     assert "run_stage" in pipeline.__all__
@@ -273,6 +282,10 @@ def test_in_memory_artifact_store_persists_lineage_envelope() -> None:
 
     assert store.objects[ref.path]["object"] == {"text": "hello"}
 
+    store.discard_object(ref)
+
+    assert ref.path not in store.objects
+
 
 def test_local_artifact_store_writes_textify_artifact_from_imsgx_source_stem(tmp_path: Path) -> None:
     candidate = make_candidate(
@@ -309,6 +322,38 @@ def test_local_artifact_store_writes_textify_artifact_from_imsgx_source_stem(tmp
     assert first_ref.size_bytes == persisted_path.stat().st_size
     assert first_ref.source_ref == candidate.source_ref
     assert first_ref.imsgx == candidate.imsgx
+
+
+def test_local_artifact_store_discards_only_objects_created_by_current_store(tmp_path: Path) -> None:
+    candidate = make_candidate(
+        artifact_path="/Users/zeph/Desktop/iMsgX/downloads/imsgx-r0008-x1-image-203-photo-1.png"
+    )
+    object_ = ProcessorObject(payload={"text": "hello"})
+    first_store = LocalArtifactStore(tmp_path)
+    first_ref = first_store.persist_object(
+        stage=PipelineStage.TEXTIFY.value,
+        ledger_tab=LedgerTab.TEXTIFICATIONS.value,
+        version="processor-v1",
+        candidate=candidate,
+        object_=object_,
+    )
+    assert first_ref.path is not None
+    persisted_path = Path(first_ref.path)
+
+    second_store = LocalArtifactStore(tmp_path)
+    second_ref = second_store.persist_object(
+        stage=PipelineStage.TEXTIFY.value,
+        ledger_tab=LedgerTab.TEXTIFICATIONS.value,
+        version="processor-v1",
+        candidate=candidate,
+        object_=object_,
+    )
+    second_store.discard_object(second_ref)
+    assert persisted_path.exists()
+
+    first_store.discard_object(ArtifactRef(kind="remote", mime_type="application/json", url="https://example.com/object.json"))
+    first_store.discard_object(first_ref)
+    assert not persisted_path.exists()
 
 
 def test_local_artifact_store_writes_translate_artifact_from_imsgx_artifact_key(tmp_path: Path) -> None:
@@ -388,7 +433,18 @@ def test_local_artifact_store_rejects_changed_content_for_same_path(tmp_path: Pa
 
 
 def test_local_artifact_store_uses_pipeline_config_effective_artifact_root(tmp_path: Path) -> None:
-    store = LocalArtifactStore.from_config(PipelineConfig(downloads_dir=tmp_path / "downloads"))
+    store = LocalArtifactStore.from_config(
+        PipelineConfig(
+            downloads_dir=tmp_path / "downloads",
+            spreadsheet_id="spreadsheet-id",
+            tabs=PipelineTabsConfig(
+                imsgx="iMsgX",
+                downloads="downloads",
+                textifications="textifications",
+                translations="translations",
+            ),
+        )
+    )
 
     assert store.root == tmp_path
 
@@ -422,6 +478,23 @@ def test_run_processor_once_records_skipped_output_source_without_artifact() -> 
     assert result.record.object_ is None
     assert result.record.output_source == candidate.source_ref
     assert result.record.metadata == {"source": candidate.source}
+
+
+def test_run_processor_once_discards_created_artifact_when_record_append_fails(tmp_path: Path) -> None:
+    candidate = make_candidate()
+    store = FailingConvertedAppendStore({PipelineStage.TEXTIFY.value: [candidate]})
+    artifacts = LocalArtifactStore(tmp_path)
+    processor = StageProcessor()
+
+    result = run_processor_once(processor, store=store, artifacts=artifacts)
+
+    assert result.status == ProcessorRunStatus.FAILED
+    assert result.record is not None
+    assert result.record.status == TextifyProcessStatus.FAILED.value
+    assert result.record.object_ is None
+    assert result.record.metadata["error"] == "record append exploded"
+    artifact_dir = tmp_path / "textifications"
+    assert not artifact_dir.exists() or not any(artifact_dir.glob("*.json"))
 
 
 def test_run_processor_once_noops_when_terminal_record_already_exists() -> None:
@@ -501,6 +574,28 @@ def test_run_stage_records_first_unhandled_candidates_in_input_order_up_to_limit
     assert fourth.source_ref.row_number not in [record.source_ref.row_number for record in store.records]
 
 
+def test_run_stage_reports_each_processor_result_to_progress_callback() -> None:
+    first = make_candidate("x://post/1", 1)
+    second = make_candidate("x://post/2", 2)
+    store = InMemoryPipelineStore({PipelineStage.TEXTIFY.value: [first, second]})
+    progress_results = []
+
+    result = run_stage(
+        StageProcessor(),
+        store=store,
+        artifacts=InMemoryArtifactStore(),
+        limit=3,
+        progress_callback=progress_results.append,
+    )
+
+    assert progress_results == list(result.processor_results)
+    assert [processor_result.status for processor_result in progress_results] == [
+        ProcessorRunStatus.RECORDED,
+        ProcessorRunStatus.RECORDED,
+        ProcessorRunStatus.NO_CANDIDATE,
+    ]
+
+
 def test_run_stage_stops_cleanly_on_no_work() -> None:
     result = run_stage(StageProcessor(), store=InMemoryPipelineStore(), artifacts=InMemoryArtifactStore(), limit=10)
 
@@ -520,9 +615,18 @@ def test_run_artifact_through_runs_textify_then_translate_and_stops_after_transl
         skip_status=TranslateProcessStatus.ALREADY_ENGLISH.value,
     )
 
-    result = run_artifact_through([textify, translate], store=store, artifacts=InMemoryArtifactStore(), limit=2)
+    progress_results = []
+
+    result = run_artifact_through(
+        [textify, translate],
+        store=store,
+        artifacts=InMemoryArtifactStore(),
+        limit=2,
+        progress_callback=progress_results.append,
+    )
 
     assert result.iterations == 1
+    assert progress_results == list(result.processor_results)
     assert [processor_result.stage for processor_result in result.processor_results] == [
         PipelineStage.TEXTIFY.value,
         PipelineStage.TRANSLATE.value,

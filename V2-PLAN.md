@@ -143,8 +143,10 @@ Do not extract:
 
 ## Google Drive Artifact Adapter
 
-Curio V1 may use a local artifact store while processor rows are written to
-Google Sheets. A later pass can add a Google Drive-backed `ArtifactStore`.
+Curio currently has a local artifact store while processor rows are written to
+Google Sheets. The Google Drive-backed `ArtifactStore` is now tracked in
+[PIPELINE-TODO.md](PIPELINE-TODO.md) as v1 pipeline work, not as an indefinite
+V2 punt.
 
 The Drive adapter should reuse the shared Google auth/session layer once it
 exists. It should preserve Curio's deterministic artifact naming and lineage

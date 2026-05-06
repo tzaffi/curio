@@ -1,12 +1,17 @@
 import json
 import uuid
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Annotated, NoReturn, cast
+from typing import Annotated, NoReturn, TextIO, cast
 
 import click
 import typer
+from rich.console import Console
+from rich.progress import Progress
 
 from curio.config import ConfigError, CurioConfig, load_config
+from curio.google_api import GoogleApiError
 from curio.llm_caller import (
     KeyringSecretStore,
     LlmCallerError,
@@ -16,7 +21,24 @@ from curio.llm_caller import (
     SubprocessCodexCliRunner,
     build_llm_caller_client,
 )
-from curio.pipeline import PipelineStage
+from curio.pipeline import (
+    PROGRESSING_PROCESSOR_RUN_STATUSES,
+    GoogleSheetsPipelineStore,
+    GoogleSheetsPipelineStoreError,
+    LocalArtifactStore,
+    PipelinePreviewItem,
+    PipelineRunResult,
+    PipelineSelector,
+    PipelineStage,
+    Processor,
+    ProcessorRunResult,
+    ProcessorRunStatus,
+    ProcessRecord,
+    ProcessRef,
+    TextifyProcessor,
+    TranslateProcessor,
+    run_stage,
+)
 from curio.schemas import SchemaValidationError
 from curio.textify import (
     DEFAULT_TEXTIFY_OUTPUT_FORMAT,
@@ -56,6 +78,12 @@ LLM_CALLER_REQUIRED_MESSAGE = "llm_caller must be configured with --llm-caller, 
 TEXTIFY_LLM_CALLER_REQUIRED_MESSAGE = (
     "llm_caller must be configured with --llm-caller, input JSON, or textify.llm_caller for non-text media"
 )
+PIPELINE_TEXTIFY_LLM_CALLER_REQUIRED_MESSAGE = (
+    "textify.llm_caller must be configured before pipeline run-stage textify --persist"
+)
+PIPELINE_TRANSLATE_LLM_CALLER_REQUIRED_MESSAGE = (
+    "translate.llm_caller must be configured before pipeline run-stage translate --persist"
+)
 
 
 @app.callback()
@@ -94,17 +122,168 @@ def _validate_pipeline_persist_mode(
     command: str,
     persist: bool,
     has_selector: bool,
+    json_output: bool = False,
 ) -> None:
+    if persist and json_output:
+        _fail_usage(f"{command} --json cannot be combined with --persist")
     if persist and has_selector:
         _fail_usage(f"{command} --persist cannot be combined with row, date, or source selectors")
     if not persist and not has_selector:
         _fail_usage(f"{command} requires --persist for next-available append sweeps")
 
 
+def _validate_pipeline_diagnostic_selector(*, has_selector: bool) -> None:
+    if not has_selector:
+        _fail_usage("pipeline doctor requires a row, date, or source selector for read-only diagnostics")
+
+
+def _build_pipeline_selector(
+    *,
+    start: str | None,
+    end: str | None,
+    source: str | None,
+    row: int | None,
+    from_row: int | None,
+    to_row: int | None,
+) -> PipelineSelector:
+    try:
+        return PipelineSelector(
+            start=start,
+            end=end,
+            source=source,
+            row=row,
+            from_row=from_row,
+            to_row=to_row,
+        )
+    except ValueError as exc:
+        _fail_usage(str(exc))
+
+
+def _load_curio_config(config_path: Path | None) -> CurioConfig:
+    try:
+        return load_config(config_path)
+    except ConfigError as exc:
+        _fail_runtime(str(exc))
+
+
+def _build_pipeline_store_from_config(config: CurioConfig, selector: PipelineSelector) -> GoogleSheetsPipelineStore:
+    try:
+        return GoogleSheetsPipelineStore.from_config(
+            google_config=config.google_config,
+            pipeline_config=config.pipeline_config,
+            selector=selector,
+        )
+    except (GoogleApiError, GoogleSheetsPipelineStoreError) as exc:
+        _fail_runtime(str(exc))
+
+
+def _build_pipeline_store(config_path: Path | None, selector: PipelineSelector) -> GoogleSheetsPipelineStore:
+    return _build_pipeline_store_from_config(_load_curio_config(config_path), selector)
+
+
+def _preview_pipeline_stages(
+    *,
+    config_path: Path | None,
+    selector: PipelineSelector,
+    stages: Sequence[PipelineStage],
+    limit: int,
+    json_output: bool,
+) -> None:
+    if limit < 1:
+        _fail_usage("--limit must be a positive integer")
+    store = _build_pipeline_store(config_path, selector)
+    items: list[PipelinePreviewItem] = []
+    try:
+        for stage in stages:
+            items.extend(store.preview_stage(stage.value, limit=limit))
+    except (ValueError, GoogleSheetsPipelineStoreError) as exc:
+        _fail_runtime(str(exc))
+    _write_output(_render_pipeline_preview(items, structured_output=json_output), None)
+
+
+def _run_pipeline_stage(
+    *,
+    config_path: Path | None,
+    stage: PipelineStage,
+    limit: int,
+) -> None:
+    if limit < 1:
+        _fail_usage("--limit must be a positive integer")
+    config = _load_curio_config(config_path)
+    try:
+        processor = _build_pipeline_processor(stage, config_path, config)
+    except (ConfigError, GoogleSheetsPipelineStoreError, LlmCallerError, TextifyError, TranslationError, ValueError, OSError) as exc:
+        _fail_runtime(str(exc))
+    store = _build_pipeline_store_from_config(config, PipelineSelector())
+    artifacts = LocalArtifactStore.from_config(config.pipeline_config)
+    try:
+        with _pipeline_progress_callback(stage=stage, total=limit) as progress_callback:
+            result = run_stage(
+                processor,
+                store=store,
+                artifacts=artifacts,
+                limit=limit,
+                progress_callback=progress_callback,
+            )
+    except (GoogleSheetsPipelineStoreError, LlmCallerError, TextifyError, TranslationError, ValueError, OSError) as exc:
+        _fail_runtime(str(exc))
+    _write_output(_render_pipeline_run_result(result), None)
+
+
+@contextmanager
+def _pipeline_progress_callback(
+    *,
+    stage: PipelineStage,
+    total: int,
+    stream: TextIO | None = None,
+    force: bool = False,
+) -> Iterator[Callable[[ProcessorRunResult], None]]:
+    target_stream = click.get_text_stream("stderr") if stream is None else stream
+    console = Console(file=target_stream, force_terminal=True if force else None)
+    with Progress(console=console, disable=not console.is_terminal) as progress:
+        task_id = progress.add_task(_pipeline_progress_description(stage), total=total)
+
+        def advance(result: ProcessorRunResult) -> None:
+            if result.status in PROGRESSING_PROCESSOR_RUN_STATUSES:
+                progress.advance(task_id)
+
+        yield advance
+
+
+def _pipeline_progress_description(stage: PipelineStage) -> str:
+    if stage == PipelineStage.TEXTIFY:
+        return "Textifying downloads"
+    return "Translating textifications"
+
+
+def _build_pipeline_processor(
+    stage: PipelineStage,
+    config_path: Path | None,
+    config: CurioConfig,
+) -> Processor:
+    if stage == PipelineStage.TEXTIFY:
+        if config.textify_config.llm_caller is None:
+            _fail_usage(PIPELINE_TEXTIFY_LLM_CALLER_REQUIRED_MESSAGE)
+        return TextifyProcessor(
+            _build_textify_service(
+                config.textify_config.llm_caller,
+                config_path,
+                config=config,
+                codex_working_directory=config.pipeline_config.downloads_dir.parent,
+            )
+        )
+    if config.translate_config.llm_caller is None:
+        _fail_usage(PIPELINE_TRANSLATE_LLM_CALLER_REQUIRED_MESSAGE)
+    return TranslateProcessor(
+        _build_translation_service(config.translate_config.llm_caller, config_path, config=config)
+    )
+
+
 def _build_llm_caller_client(
     llm_caller: str,
     config_path: Path | None,
     config: CurioConfig | None = None,
+    codex_working_directory: Path | None = None,
 ) -> LlmClient:
     curio_config = load_config(config_path) if config is None else config
     return build_llm_caller_client(
@@ -114,7 +293,7 @@ def _build_llm_caller_client(
         codex_runner=SubprocessCodexCliRunner(),
         openai_transport=SdkOpenAiApiTransport(),
         google_document_ai_transport=SdkGoogleDocumentAiTransport(),
-        codex_working_directory=Path.cwd(),
+        codex_working_directory=Path.cwd() if codex_working_directory is None else codex_working_directory,
     )
 
 
@@ -136,13 +315,19 @@ def _build_textify_service(
     llm_caller: str | None,
     config_path: Path | None,
     config: CurioConfig | None = None,
+    codex_working_directory: Path | None = None,
 ) -> TextifyService:
     if llm_caller is None:
         return TextifyService()
     curio_config = load_config(config_path) if config is None else config
     caller_config = curio_config.llm_caller_config(llm_caller)
     return TextifyService(
-        llm_client=_build_llm_caller_client(llm_caller, config_path, config=curio_config),
+        llm_client=_build_llm_caller_client(
+            llm_caller,
+            config_path,
+            config=curio_config,
+            codex_working_directory=codex_working_directory,
+        ),
         prompt_config=caller_config.prompt_config,
         pricing_config=caller_config.pricing_config,
     )
@@ -403,6 +588,118 @@ def _render_textify_output(
     if len(suggested_files) == 1:
         return suggested_files[0].text + "\n"
     return json.dumps(response.to_json(), ensure_ascii=False) + "\n"
+
+
+def _render_pipeline_preview(
+    items: Sequence[PipelinePreviewItem],
+    *,
+    structured_output: bool,
+) -> str:
+    if structured_output:
+        return json.dumps(
+            {"items": [item.to_json() for item in items]},
+            ensure_ascii=False,
+            sort_keys=True,
+        ) + "\n"
+    if not items:
+        return "No matching pipeline preview rows.\n"
+
+    rows = [
+        (
+            "stage",
+            "downloads_row",
+            "source",
+            "input_ref",
+            "action",
+            "reason",
+        ),
+        *(
+            (
+                item.stage,
+                "-" if item.downloads_row is None else str(item.downloads_row),
+                item.source,
+                _format_pipeline_ref(item.input_ref),
+                str(item.action),
+                item.reason,
+            )
+            for item in items
+        ),
+    ]
+    widths = [max(len(row[index]) for row in rows) for index in range(len(rows[0]))]
+    rendered_rows = [
+        "  ".join(value.ljust(widths[index]) for index, value in enumerate(row)).rstrip()
+        for row in rows
+    ]
+    return "\n".join(rendered_rows) + "\n"
+
+
+def _render_pipeline_run_result(result: PipelineRunResult) -> str:
+    rows = [
+        (
+            "stage",
+            "status",
+            "downloads_row",
+            "source",
+            "record_status",
+            "object",
+            "detail",
+        ),
+        *(_pipeline_run_result_row(processor_result) for processor_result in result.processor_results),
+    ]
+    widths = [max(len(row[index]) for row in rows) for index in range(len(rows[0]))]
+    rendered_rows = [
+        "  ".join(value.ljust(widths[index]) for index, value in enumerate(row)).rstrip()
+        for row in rows
+    ]
+    return "\n".join(rendered_rows) + "\n"
+
+
+def _pipeline_run_result_row(result: ProcessorRunResult) -> tuple[str, str, str, str, str, str, str]:
+    candidate = result.candidate
+    record = result.record or result.existing_record
+    downloads_row = candidate.source_ref.row_number if candidate is not None else None
+    source = candidate.source if candidate is not None else "-"
+    record_status = record.status if record is not None else "-"
+    object_ref = "-" if record is None or record.object_ is None else record.object_.path or record.object_.url or "-"
+    detail = _pipeline_run_result_detail(result, record)
+    return (
+        result.stage,
+        ProcessorRunStatus(result.status).value,
+        "-" if downloads_row is None else str(downloads_row),
+        source,
+        record_status,
+        object_ref,
+        detail,
+    )
+
+
+def _pipeline_run_result_detail(result: ProcessorRunResult, record: object) -> str:
+    if result.status == ProcessorRunStatus.NO_CANDIDATE:
+        return "no candidate"
+    if not isinstance(record, ProcessRecord):
+        return "-"
+    if result.status == ProcessorRunStatus.FAILED:
+        error_type = record.metadata.get("error_type")
+        error = record.metadata.get("error")
+        if isinstance(error_type, str) and isinstance(error, str) and error:
+            return _compact_pipeline_detail(f"{error_type}: {error}")
+        if isinstance(error, str) and error:
+            return _compact_pipeline_detail(error)
+    return "-"
+
+
+def _compact_pipeline_detail(value: str) -> str:
+    return " ".join(value.split())
+
+
+def _format_pipeline_ref(ref: ProcessRef | None) -> str:
+    if ref is None:
+        return "-"
+    if ref.row_number is not None:
+        return f"{ref.tab}!{ref.row_number}"
+    if ref.artifact_path is not None:
+        return ref.artifact_path
+    return ref.source
 
 
 def _is_single_skipped_text_media_response(response: TextifyResponse) -> bool:
@@ -714,6 +1011,10 @@ def curate() -> None:
 
 @pipeline_app.command("run")
 def pipeline_run(
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Read Curio runtime config JSON. Defaults to ./config.json."),
+    ] = None,
     limit: Annotated[int, typer.Option("--limit", help="Maximum number of upstream downloads rows to process.")] = 10,
     persist: Annotated[bool, typer.Option("--persist", help="Append rows and write artifacts for the next available work.")] = False,
     start: Annotated[
@@ -736,24 +1037,46 @@ def pipeline_run(
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable preview JSON.")] = False,
 ) -> None:
     """Run textify and translate pipeline stages."""
+    has_selector = _has_pipeline_selector(
+        start=start,
+        end=end,
+        source=None,
+        row=row,
+        from_row=from_row,
+        to_row=to_row,
+    )
     _validate_pipeline_persist_mode(
         command="pipeline run",
         persist=persist,
-        has_selector=_has_pipeline_selector(
-            start=start,
-            end=end,
-            source=None,
-            row=row,
-            from_row=from_row,
-            to_row=to_row,
-        ),
+        has_selector=has_selector,
+        json_output=json_output,
     )
+    if has_selector:
+        _preview_pipeline_stages(
+            config_path=config_path,
+            selector=_build_pipeline_selector(
+                start=start,
+                end=end,
+                source=None,
+                row=row,
+                from_row=from_row,
+                to_row=to_row,
+            ),
+            stages=(PipelineStage.TEXTIFY, PipelineStage.TRANSLATE),
+            limit=limit,
+            json_output=json_output,
+        )
+        return
     _reserved("pipeline run")
 
 
 @pipeline_app.command("run-stage")
 def pipeline_run_stage(
     stage: Annotated[PipelineStage, typer.Argument(help="Pipeline stage to run.")],
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Read Curio runtime config JSON. Defaults to ./config.json."),
+    ] = None,
     limit: Annotated[int, typer.Option("--limit", help="Maximum number of stage candidates to process.")] = 10,
     persist: Annotated[bool, typer.Option("--persist", help="Append rows and write artifacts for the next available work.")] = False,
     start: Annotated[
@@ -777,19 +1100,37 @@ def pipeline_run_stage(
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable preview JSON.")] = False,
 ) -> None:
     """Run one pipeline stage."""
+    has_selector = _has_pipeline_selector(
+        start=start,
+        end=end,
+        source=source,
+        row=row,
+        from_row=from_row,
+        to_row=to_row,
+    )
     _validate_pipeline_persist_mode(
         command=f"pipeline run-stage {stage.value}",
         persist=persist,
-        has_selector=_has_pipeline_selector(
-            start=start,
-            end=end,
-            source=source,
-            row=row,
-            from_row=from_row,
-            to_row=to_row,
-        ),
+        has_selector=has_selector,
+        json_output=json_output,
     )
-    _reserved("pipeline run-stage")
+    if has_selector:
+        _preview_pipeline_stages(
+            config_path=config_path,
+            selector=_build_pipeline_selector(
+                start=start,
+                end=end,
+                source=source,
+                row=row,
+                from_row=from_row,
+                to_row=to_row,
+            ),
+            stages=(stage,),
+            limit=limit,
+            json_output=json_output,
+        )
+        return
+    _run_pipeline_stage(config_path=config_path, stage=stage, limit=limit)
 
 
 @pipeline_app.command("doctor")
@@ -819,7 +1160,29 @@ def pipeline_doctor(
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable diagnostics JSON.")] = False,
 ) -> None:
     """Diagnose pipeline state."""
-    _reserved("pipeline doctor")
+    has_selector = _has_pipeline_selector(
+        start=start,
+        end=end,
+        source=source,
+        row=row,
+        from_row=from_row,
+        to_row=to_row,
+    )
+    _validate_pipeline_diagnostic_selector(has_selector=has_selector)
+    _preview_pipeline_stages(
+        config_path=config_path,
+        selector=_build_pipeline_selector(
+            start=start,
+            end=end,
+            source=source,
+            row=row,
+            from_row=from_row,
+            to_row=to_row,
+        ),
+        stages=(PipelineStage.TEXTIFY, PipelineStage.TRANSLATE),
+        limit=10,
+        json_output=json_output,
+    )
 
 
 @app.command("bootstrap")

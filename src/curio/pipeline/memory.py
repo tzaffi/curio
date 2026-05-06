@@ -115,6 +115,10 @@ class InMemoryArtifactStore:
             imsgx=candidate.imsgx,
         )
 
+    def discard_object(self, ref: ArtifactRef) -> None:
+        if ref.path is not None:
+            self._objects.pop(ref.path, None)
+
 
 def _json_bytes(value: Mapping[str, JsonValue]) -> bytes:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")

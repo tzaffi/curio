@@ -7,6 +7,7 @@ from curio.llm_caller import LlmUsage
 from curio.pipeline import (
     InMemoryArtifactStore,
     InMemoryPipelineStore,
+    LocalArtifactStore,
     PipelineStage,
     ProcessCandidate,
     ProcessRef,
@@ -54,6 +55,22 @@ def make_candidate(metadata: dict[str, object], *, source: str = "x://post/123")
         imsgx=source_ref,
         source=source,
         artifact_key="source.txt",
+        metadata=metadata,
+    )
+
+
+def make_candidate_without_artifact(metadata: dict[str, object], *, source: str = "x://post/123") -> ProcessCandidate:
+    source_ref = ProcessRef(
+        stage="download",
+        tab="downloads",
+        source=source,
+        row_number=1,
+    )
+    return ProcessCandidate(
+        source_ref=source_ref,
+        imsgx=source_ref,
+        source=source,
+        artifact_key=None,
         metadata=metadata,
     )
 
@@ -116,6 +133,15 @@ class FakeTranslationService:
     def translate(self, request: object) -> TranslationResponse:
         self.requests.append(request)
         return self.response
+
+
+class FailingTranslationService:
+    def __init__(self) -> None:
+        self.requests: list[object] = []
+
+    def translate(self, request: object) -> TranslationResponse:
+        self.requests.append(request)
+        raise RuntimeError("catastrophic translate failure")
 
 
 def test_pipeline_root_exports_processors() -> None:
@@ -192,6 +218,55 @@ def test_textify_processor_records_non_object_outcomes(
         "artifact_kind": "tweet_json",
         "evidence_text": "already text",
     }
+
+
+def test_textify_processor_records_known_unsupported_video_without_artifact_or_service_call() -> None:
+    candidate = make_candidate_without_artifact(
+        {
+            "source": "https://x.com/sharbel/status/2025944354070659094/video/1",
+            "type": "Tweet",
+            "column": "Text",
+            "object": "https://drive.google.com/file/d/video-file/view",
+        },
+        source="https://x.com/sharbel/status/2025944354070659094/video/1",
+    )
+    service = FakeTextifyService(make_textify_response(TextifyStatus.CONVERTED))
+    store = InMemoryPipelineStore({PipelineStage.TEXTIFY.value: [candidate]})
+    artifacts = InMemoryArtifactStore()
+
+    result = run_processor_once(TextifyProcessor(service), store=store, artifacts=artifacts)
+
+    assert result.record is not None
+    assert result.record.status == TextifyProcessStatus.UNSUPPORTED.value
+    assert result.record.object_ is None
+    assert result.record.metadata == {
+        "textify_status": TextifyStatus.UNSUPPORTED_MEDIA.value,
+        "warnings": ["unsupported media type for textify v1: video"],
+    }
+    assert service.requests == []
+    assert artifacts.objects == {}
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"mime_type": "video/mp4"},
+        {"type": "Video"},
+        {"column": "Video"},
+        {"name": "clip.mov"},
+        {"object": "https://example.com/media/clip.webm?download=1"},
+    ],
+)
+def test_textify_processor_known_unsupported_video_classifiers_skip_before_request(metadata: dict[str, object]) -> None:
+    candidate = make_candidate_without_artifact(metadata)
+    service = FakeTextifyService(make_textify_response(TextifyStatus.CONVERTED))
+    store = InMemoryPipelineStore({PipelineStage.TEXTIFY.value: [candidate]})
+
+    result = run_processor_once(TextifyProcessor(service), store=store, artifacts=InMemoryArtifactStore())
+
+    assert result.record is not None
+    assert result.record.status == TextifyProcessStatus.UNSUPPORTED.value
+    assert service.requests == []
 
 
 def test_textify_processor_requires_path() -> None:
@@ -281,14 +356,51 @@ def test_translate_processor_uses_structured_blocks_and_records_already_english(
     )
     service = FakeTranslationService(make_translation_response(block))
     store = InMemoryPipelineStore({PipelineStage.TRANSLATE.value: [candidate]})
+    artifacts = InMemoryArtifactStore()
 
-    result = run_processor_once(TranslateProcessor(service), store=store, artifacts=InMemoryArtifactStore())
+    result = run_processor_once(TranslateProcessor(service), store=store, artifacts=artifacts)
 
     assert result.record is not None
     assert result.record.status == TranslateProcessStatus.ALREADY_ENGLISH.value
     assert result.record.object_ is None
     assert result.record.output_source == candidate.source_ref
+    assert artifacts.objects == {}
     assert service.requests[0].blocks[0].text == "Already English."
+
+
+def test_translate_processor_already_english_creates_no_local_artifact(tmp_path: Path) -> None:
+    candidate = make_candidate({"text": "Already English.", "name": "note"})
+    block = TranslatedBlock(
+        block_id=1,
+        name="note",
+        detected_language="en",
+        english_confidence_estimate=0.99,
+        translation_required=False,
+        translated_text=None,
+    )
+    service = FakeTranslationService(make_translation_response(block))
+    store = InMemoryPipelineStore({PipelineStage.TRANSLATE.value: [candidate]})
+
+    result = run_processor_once(TranslateProcessor(service), store=store, artifacts=LocalArtifactStore(tmp_path))
+
+    assert result.record is not None
+    assert result.record.status == TranslateProcessStatus.ALREADY_ENGLISH.value
+    assert result.record.object_ is None
+    assert not (tmp_path / "translations").exists()
+
+
+def test_translate_processor_service_failure_records_failed_without_artifact(tmp_path: Path) -> None:
+    candidate = make_candidate({"text": "bonjour", "name": "note"})
+    service = FailingTranslationService()
+    store = InMemoryPipelineStore({PipelineStage.TRANSLATE.value: [candidate]})
+
+    result = run_processor_once(TranslateProcessor(service), store=store, artifacts=LocalArtifactStore(tmp_path))
+
+    assert result.record is not None
+    assert result.record.status == TranslateProcessStatus.FAILED.value
+    assert result.record.object_ is None
+    assert result.record.metadata["error"] == "catastrophic translate failure"
+    assert not (tmp_path / "translations").exists()
 
 
 @pytest.mark.parametrize(
@@ -315,13 +427,16 @@ def test_translate_processor_records_invalid_candidate_failures(
         translated_text=None,
     )
     store = InMemoryPipelineStore({PipelineStage.TRANSLATE.value: [candidate]})
+    artifacts = InMemoryArtifactStore()
 
     result = run_processor_once(
         TranslateProcessor(FakeTranslationService(make_translation_response(block))),
         store=store,
-        artifacts=InMemoryArtifactStore(),
+        artifacts=artifacts,
     )
 
     assert result.record is not None
     assert result.record.status == TranslateProcessStatus.FAILED.value
+    assert result.record.object_ is None
     assert expected_error in result.record.metadata["error"]
+    assert artifacts.objects == {}
