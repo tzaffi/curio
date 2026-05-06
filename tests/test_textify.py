@@ -36,7 +36,10 @@ from curio.textify import (
     source_sha256,
     validate_suggested_path,
 )
-from curio.textify.validation import MARKDOWN_CODE_FENCE_REPAIR_WARNING
+from curio.textify.validation import (
+    MARKDOWN_CODE_FENCE_REPAIR_WARNING,
+    NO_TEXT_SUGGESTED_FILES_REPAIR_WARNING,
+)
 
 
 def write_file(path: Path, data: bytes) -> Path:
@@ -364,6 +367,21 @@ def test_textify_service_repairs_outer_markdown_code_fence_with_warning(tmp_path
 
     assert response.source.suggested_files[0].text == "# Receipt\n\nTotal 1200 yen"
     assert response.source.warnings == ("low contrast", MARKDOWN_CODE_FENCE_REPAIR_WARNING)
+    assert response.warnings == ("provider warning",)
+
+
+def test_textify_service_repairs_no_text_response_with_accidental_suggested_files(tmp_path: Path) -> None:
+    artifact_path = write_file(tmp_path / "blank.jpg", b"jpg")
+    request = make_request(artifact_path)
+    output = cast(dict[str, object], converted_output(name="blank.jpg"))
+    source = cast(dict[str, object], output["source"])
+    client = RecordingLlmClient({**output, "source": {**source, "status": "no_text_found"}})
+
+    response = TextifyService(llm_client=client).textify(request)
+
+    assert response.source.status == TextifyStatus.NO_TEXT_FOUND
+    assert response.source.suggested_files == ()
+    assert response.source.warnings == ("low contrast", NO_TEXT_SUGGESTED_FILES_REPAIR_WARNING)
     assert response.warnings == ("provider warning",)
 
 

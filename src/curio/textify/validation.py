@@ -18,6 +18,7 @@ from curio.textify.models import (
 )
 
 MARKDOWN_CODE_FENCE_REPAIR_WARNING = "removed single outer markdown code fence from model output"
+NO_TEXT_SUGGESTED_FILES_REPAIR_WARNING = "discarded suggested_files from no_text_found model output"
 
 
 def textified_source_from_llm_response(
@@ -107,11 +108,17 @@ def _repair_textified_model_source(
     model_source: Mapping[str, JsonValue],
 ) -> Mapping[str, JsonValue]:
     suggested_files: list[JsonValue] = []
+    status = TextifyStatus(_require_string(_require_field(model_source, "status"), "status"))
     warnings = [
         _require_string(warning, "warning")
         for warning in _require_list(_require_field(model_source, "warnings"), "warnings")
     ]
-    for item in _require_list(_require_field(model_source, "suggested_files"), "suggested_files"):
+    raw_suggested_files = _require_list(_require_field(model_source, "suggested_files"), "suggested_files")
+    if status == TextifyStatus.NO_TEXT_FOUND and raw_suggested_files:
+        if NO_TEXT_SUGGESTED_FILES_REPAIR_WARNING not in warnings:
+            warnings.append(NO_TEXT_SUGGESTED_FILES_REPAIR_WARNING)
+        return {**model_source, "suggested_files": [], "warnings": warnings}
+    for item in raw_suggested_files:
         suggested_file = SuggestedTextFile.from_json(item)
         repaired_file, warning = _repair_markdown_code_fence(suggested_file, input_source)
         suggested_files.append(repaired_file.to_json())

@@ -656,6 +656,31 @@ Current implementation state:
 - Known unsupported textify media, including video inputs, append
   `unsupported` before `TextifyRequest` construction; missing local video
   artifact paths are not `failed` outcomes.
+- Post-run fallout fixes completed for observed live `run-stage` behavior:
+  - Mutating `run-stage` uses the shared Rich/iMsgX-style progress rendering.
+  - `AnimatedGif` inputs are classified as `unsupported` before request
+    construction, with no provider call and no artifact.
+  - Repo zip artifacts resolve through local download lookup and flow to the
+    existing unsupported-media classification instead of failing on a missing
+    path.
+  - Missing local artifact failures include attempted `downloads_dir`,
+    expected iMsgX filename prefix, downloads row, column, type, and object
+    cell diagnostics.
+  - Translation treats `zxx`, `und`, and similar values as unknown language
+    hints, not as real non-English source languages.
+  - Translation input extraction prefers meaningful article, parent/quoted
+    tweet, card title/description, and natural-language text over URL-only
+    wrapper text.
+  - Clearly English inputs deterministically record `already_english` without
+    provider calls or artifact creation.
+  - Codex nonzero failures preserve structured details when available and
+    include capped sanitized stdout/stderr context otherwise.
+  - `no_text_found` textify responses with accidental `suggested_files` are
+    repaired to `no_text` instead of recording `failed`.
+  - The arXiv numeric PDF extension issue is documented separately as an
+    iMsgX bug report because the bad filename originates in `imsgx download`.
+  - Existing stale failed rows may still block default selection until retry
+    semantics are explicitly designed.
 - Never use CLI row options as output row positions.
 - Stop at the requested limit or first unrecoverable runtime failure.
 - Real commands must not use fake stores, fake services, or offline fixture

@@ -12,6 +12,7 @@ from curio.textify import (
 )
 from curio.textify.validation import (
     MARKDOWN_CODE_FENCE_REPAIR_WARNING,
+    NO_TEXT_SUGGESTED_FILES_REPAIR_WARNING,
     textified_source_from_llm_response,
     validate_textified_model_source,
     validate_textify_model_output,
@@ -189,8 +190,10 @@ def test_textify_validation_rejects_status_and_file_errors(tmp_path: Path) -> No
     with pytest.raises(TextifyResponseError, match="converted sources"):
         validate_textified_model_source(source, output_payload(suggested_files=[])["source"])
 
+    validate_textified_model_source(source, output_payload(status="no_text_found")["source"])
+
     with pytest.raises(TextifyResponseError, match="non-converted sources"):
-        validate_textified_model_source(source, output_payload(status="no_text_found")["source"])
+        validate_textified_model_source(source, output_payload(status="unsupported_media")["source"])
 
     validate_textified_model_source(
         source,
@@ -252,6 +255,21 @@ def test_textify_validation_rejects_status_and_file_errors(tmp_path: Path) -> No
             ]
         )["source"],
     )
+
+
+def test_textified_source_repairs_no_text_response_with_accidental_suggested_files(tmp_path: Path) -> None:
+    source = make_source(tmp_path / "scan.png")
+    request = TextifyRequest(request_id="textify-test", source=source)
+
+    textified_source = textified_source_from_llm_response(
+        request,
+        source,
+        make_response(output_payload(status="no_text_found")),
+    )
+
+    assert textified_source.status == "no_text_found"
+    assert textified_source.suggested_files == ()
+    assert textified_source.warnings == (NO_TEXT_SUGGESTED_FILES_REPAIR_WARNING,)
 
 
 def test_textify_validation_rejects_low_level_type_errors() -> None:
