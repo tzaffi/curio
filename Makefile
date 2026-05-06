@@ -27,7 +27,7 @@ PIPELINE_INSPECT_ARGS = $(if $(strip $(CONFIG)),--config "$(CONFIG)",) $(if $(st
 export TEXT
 export ARTIFACT
 
-.PHONY: help sync test translate-smoke translate-smoke-collect translate-smoke-evaluate translate-smoke-report textify-smoke textify-smoke-collect textify-smoke-evaluate textify-smoke-report lint lint-fix typecheck check curio cli-help translate translate-genius translate-help textify textify-genius textify-help pipeline-help pipeline-run-help pipeline-run-stage-help pipeline-doctor-help pipeline-run pipeline-run-stage pipeline-doctor build-wheel
+.PHONY: help sync test translate-smoke translate-smoke-collect translate-smoke-evaluate translate-smoke-report textify-smoke textify-smoke-collect textify-smoke-evaluate textify-smoke-report lint lint-fix typecheck check curio cli-help translate translate-genius translate-help textify textify-genius textify-help pipeline-help pipeline-run-help pipeline-run-stage-help pipeline-doctor-help pipeline-run pipeline-run-stage p-t-n-t pipeline-doctor build-wheel
 
 help:
 	@printf '%s\n' \
@@ -58,6 +58,7 @@ help:
 		'make pipeline-run-stage-help  Show the curio pipeline run-stage help' \
 		'make pipeline-run             Append next LIMIT=10 artifact-through items with PERSIST=1; row/date selectors inspect only' \
 		'make pipeline-run-stage       Append next LIMIT=10 stage items with PERSIST=1; override STAGE=textify|translate; selectors inspect only' \
+		'make p-t-n-t LIMIT=300        Append textify then translate stage items with PERSIST=1' \
 		'make pipeline-doctor          Run pipeline diagnostics command surface; override input filters START=... END=... ROW=...' \
 		'make build-wheel              Build a wheel for local installation/testing'
 
@@ -159,6 +160,11 @@ pipeline-run:
 
 pipeline-run-stage:
 	$(CURIO) pipeline run-stage $(STAGE) $(PIPELINE_STAGE_ARGS) $(OPTS)
+
+p-t-n-t: override PERSIST := 1
+p-t-n-t:
+	$(CURIO) pipeline run-stage textify $(PIPELINE_STAGE_ARGS) $(OPTS)
+	$(CURIO) pipeline run-stage translate $(PIPELINE_STAGE_ARGS) $(OPTS)
 
 pipeline-doctor:
 	$(CURIO) pipeline doctor $(PIPELINE_INSPECT_ARGS) $(OPTS)
