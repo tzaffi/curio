@@ -323,7 +323,13 @@ write local artifacts. The processor sheet row is the record for those cases.
 If a local artifact is created but the sheet append fails, Curio discards the
 artifact from that current attempt before recording or surfacing the failure.
 Known unsupported textify media, including video inputs, are recorded as
-`unsupported` without requiring a local artifact path.
+`unsupported` without requiring a local artifact path. `AnimatedGif` is also
+unsupported in the v1 textify scope.
+
+Existing processor rows, including `failed` rows, may block default
+next-available reprocessing for that input. Clean up the ledger row manually
+for now if you intentionally want to retry it; explicit retry semantics are a
+later pipeline checkpoint.
 
 Current executable pipeline commands use the local artifact store. A
 Google Drive-backed artifact store is tracked as the next pipeline storage

@@ -12,6 +12,7 @@ from curio.translate.models import (
     TranslationResponse,
     TranslationResponseError,
     counts_as_english,
+    normalize_language_hint,
 )
 from curio.translate.service import TranslationService
 
@@ -30,4 +31,5 @@ __all__ = [
     "TranslationResponseError",
     "TranslationService",
     "counts_as_english",
+    "normalize_language_hint",
 ]

@@ -211,3 +211,4 @@ TODO-*.md
 tmp/*
 
 config.json
+*-BUG-REPORT*.md

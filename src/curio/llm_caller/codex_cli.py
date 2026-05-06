@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 import tempfile
 from collections.abc import Mapping, Sequence
@@ -485,6 +486,8 @@ def _codex_exit_status_message(run_result: CodexCliRunResult) -> str:
     message = f"codex_cli subprocess exited with status {run_result.return_code}"
     detail = _codex_failure_detail(run_result.stdout)
     if detail is None:
+        detail = _codex_unstructured_failure_detail(run_result.stderr) or _codex_unstructured_failure_detail(run_result.stdout)
+    if detail is None:
         return message
     return f"{message}: {detail}"
 
@@ -518,6 +521,21 @@ def _codex_failure_detail(stdout: str) -> str | None:
     if not messages:
         return None
     return messages[-1]
+
+
+def _codex_unstructured_failure_detail(output: str, *, limit: int = 500) -> str | None:
+    lines: list[str] = []
+    for line in output.splitlines():
+        stripped_line = line.strip()
+        if not stripped_line or _is_codex_stdout_diagnostic(stripped_line):
+            continue
+        lines.append(stripped_line)
+    if not lines:
+        return None
+    detail = re.sub(r"\s+", " ", " ".join(lines)).strip()
+    if len(detail) <= limit:
+        return detail
+    return f"{detail[: limit - 3].rstrip()}..."
 
 
 def _is_codex_stdout_diagnostic(line: str) -> bool:

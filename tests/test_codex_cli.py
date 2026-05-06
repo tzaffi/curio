@@ -672,12 +672,34 @@ def test_codex_cli_client_maps_runner_failures_and_exit_status(tmp_path: Path) -
                 json.dumps({"type": "turn.failed", "error": "bad shape"}),
             )
         ),
+        stderr="fatal provider stderr\nwith details",
         return_code=9,
     )
     failed_without_detail_client = make_client(failed_without_detail_runner, tmp_path)
     with pytest.raises(LlmRejectedRequestError) as failed_without_detail:
         failed_without_detail_client.complete(make_request())
-    assert str(failed_without_detail.value) == "codex_cli subprocess exited with status 9"
+    assert str(failed_without_detail.value) == "codex_cli subprocess exited with status 9: fatal provider stderr with details"
+
+    blank_failed_runner = FakeCodexCliRunner(stdout="", stderr="", return_code=11)
+    blank_failed_client = make_client(blank_failed_runner, tmp_path)
+    with pytest.raises(LlmRejectedRequestError) as blank_failed:
+        blank_failed_client.complete(make_request())
+    assert str(blank_failed.value) == "codex_cli subprocess exited with status 11"
+
+
+def test_codex_cli_unstructured_failure_detail_is_capped_and_filters_diagnostics() -> None:
+    assert (
+        codex_cli._codex_unstructured_failure_detail(
+            "\n".join(
+                (
+                    "Reading additional input from stdin...",
+                    "2026-04-26T05:55:08.822038Z  WARN codex_core_plugins::manifest: ignored plugin warning",
+                )
+            )
+        )
+        is None
+    )
+    assert codex_cli._codex_unstructured_failure_detail("x" * 40, limit=20) == "xxxxxxxxxxxxxxxxx..."
 
 
 def test_codex_cli_client_reports_invalid_or_schema_invalid_output(tmp_path: Path) -> None:

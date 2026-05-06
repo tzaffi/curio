@@ -3,6 +3,7 @@ import mimetypes
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Final, Self, cast
 from urllib.parse import quote
@@ -27,6 +28,7 @@ from curio.pipeline.models import (
     ProcessRef,
     TextifyProcessStatus,
 )
+from curio.translate import normalize_language_hint
 
 GOOGLE_SHEETS_API_BASE_URL: Final = "https://sheets.googleapis.com/v4/spreadsheets"
 IMSGX_HEADERS: Final = (
@@ -45,6 +47,7 @@ PROCESSOR_HEADERS: Final = ("Date", "X Date", "iMsgX", "Type", "Source", "Status
 _ROW_URL_RE: Final = re.compile(r"docs\.google\.com/spreadsheets/d/([^/]+)/edit#gid=(\d+)&range=[A-Z]+(\d+)")
 _UPDATED_RANGE_ROW_RE: Final = re.compile(r"![A-Z]+(\d+):")
 _SLUG_RE: Final = re.compile(r"[^a-z0-9]+")
+_URL_ONLY_RE: Final = re.compile(r"(?:https?://|www\.|t\.co/|pic\.x\.com/)\S+", re.IGNORECASE)
 
 
 class GoogleSheetsPipelineStoreError(RuntimeError):
@@ -444,6 +447,10 @@ class GoogleSheetsPipelineStore:
         local_path = self._local_download_path(row)
         source_ref = self._download_ref(row, local_path=local_path)
         metadata = _download_metadata(row)
+        metadata["downloads_dir"] = str(self.config.downloads_dir)
+        expected_prefix = self._local_download_prefix(row)
+        if expected_prefix is not None:
+            metadata["expected_artifact_prefix"] = expected_prefix
         if local_path is not None:
             metadata.update(
                 {
@@ -739,12 +746,17 @@ class GoogleSheetsPipelineStore:
             object_path = Path(row.object_value).expanduser()
             if object_path.is_absolute() and object_path.exists():
                 return object_path
+        prefix = self._local_download_prefix(row)
+        if prefix is None:
+            return None
+        matches = sorted(path for path in self.config.downloads_dir.glob(f"{prefix}*") if path.is_file())
+        return matches[0] if matches else None
+
+    def _local_download_prefix(self, row: _DownloadRow) -> str | None:
         imsgx_row = _parse_google_row_url(row.imsgx)
         if imsgx_row is None:
             return None
-        prefix = f"imsgx-r{imsgx_row['row_number']:04d}-{_slugify(row.column)}-{_slugify(row.type_)}-"
-        matches = sorted(path for path in self.config.downloads_dir.glob(f"{prefix}*") if path.is_file())
-        return matches[0] if matches else None
+        return f"imsgx-r{imsgx_row['row_number']:04d}-{_slugify(row.column)}-{_slugify(row.type_)}-"
 
     def _row_url(self, tab: str, row_number: int) -> str:
         return _row_url(
@@ -882,6 +894,12 @@ def _text_from_artifact(path: Path) -> _ExtractedText:
             extracted = _text_from_json_mapping(payload_mapping)
             if extracted is not None:
                 return extracted
+    if path.suffix.casefold() in {".html", ".htm"}:
+        return _ExtractedText(
+            text=_non_empty_artifact_text(_text_from_html(raw_text), path),
+            source_language_hint=None,
+            source="html_text",
+        )
     return _ExtractedText(
         text=_non_empty_artifact_text(raw_text, path),
         source_language_hint=None,
@@ -890,32 +908,49 @@ def _text_from_artifact(path: Path) -> _ExtractedText:
 
 
 def _text_from_json_mapping(payload: Mapping[str, object]) -> _ExtractedText | None:
+    candidates: list[_ExtractedText] = []
     if (article := _string_keyed_mapping(payload.get("article"))) is not None:
         article_text = _non_empty_json_string(article.get("plain_text"))
         if article_text is not None:
-            return _ExtractedText(article_text, _json_language_hint(article), "article.plain_text")
+            candidates.append(_ExtractedText(article_text, _json_language_hint(article), "article.plain_text"))
         article_preview_text = _article_preview_text(article)
         if article_preview_text is not None:
-            return _ExtractedText(article_preview_text, _json_language_hint(article), "article.title_preview_text")
+            candidates.append(_ExtractedText(article_preview_text, _json_language_hint(article), "article.title_preview_text"))
 
     plain_text = _non_empty_json_string(payload.get("plain_text"))
     if plain_text is not None:
-        return _ExtractedText(plain_text, _json_language_hint(payload), "plain_text")
+        candidates.append(_ExtractedText(plain_text, _json_language_hint(payload), "plain_text"))
+
+    for nested_key in ("parent", "quoted_tweet"):
+        nested = _string_keyed_mapping(payload.get(nested_key))
+        if nested is None:
+            continue
+        nested_text = _text_from_json_mapping(nested)
+        if nested_text is not None:
+            candidates.append(
+                _ExtractedText(
+                    text=nested_text.text,
+                    source_language_hint=nested_text.source_language_hint,
+                    source=f"{nested_key}.{nested_text.source}",
+                )
+            )
+
+    candidates.extend(_card_text_candidates(payload))
 
     text = _non_empty_json_string(payload.get("text"))
     if text is not None:
-        return _ExtractedText(text, _json_language_hint(payload), "text")
+        candidates.append(_ExtractedText(text, _json_language_hint(payload), "text"))
 
     if (data := _string_keyed_mapping(payload.get("data"))) is not None:
         data_text = _non_empty_json_string(data.get("text"))
         if data_text is not None:
-            return _ExtractedText(data_text, _json_language_hint(data), "data.text")
+            candidates.append(_ExtractedText(data_text, _json_language_hint(data), "data.text"))
 
     content = _non_empty_json_string(payload.get("content"))
     if content is not None:
-        return _ExtractedText(content, _json_language_hint(payload), "content")
+        candidates.append(_ExtractedText(content, _json_language_hint(payload), "content"))
 
-    return None
+    return _choose_extracted_text(candidates)
 
 
 def _article_preview_text(article: Mapping[str, object]) -> str | None:
@@ -936,13 +971,51 @@ def _string_keyed_mapping(value: object) -> Mapping[str, object] | None:
     return cast(Mapping[str, object], value)
 
 
+def _card_text_candidates(payload: Mapping[str, object]) -> list[_ExtractedText]:
+    card = _string_keyed_mapping(payload.get("card"))
+    if card is None:
+        return []
+    binding_values = _string_keyed_mapping(card.get("binding_values"))
+    if binding_values is None:
+        return []
+    candidates: list[_ExtractedText] = []
+    for key in (
+        "title",
+        "description",
+        "summary_photo_image_alt_text",
+        "photo_image_full_size_alt_text",
+        "thumbnail_image_alt_text",
+    ):
+        value = _string_keyed_mapping(binding_values.get(key))
+        if value is None:
+            continue
+        text = _non_empty_json_string(value.get("string_value"))
+        if text is not None:
+            candidates.append(_ExtractedText(text, _json_language_hint(payload), f"card.{key}"))
+    return candidates
+
+
+def _choose_extracted_text(candidates: Sequence[_ExtractedText]) -> _ExtractedText | None:
+    return next((candidate for candidate in candidates if not _is_url_only_text(candidate.text)), None) or next(
+        iter(candidates),
+        None,
+    )
+
+
+def _is_url_only_text(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return False
+    return not _URL_ONLY_RE.sub("", stripped).strip()
+
+
 def _json_language_hint(payload: Mapping[str, object]) -> str | None:
     lang = _non_empty_json_string(payload.get("lang"))
     if lang is not None:
-        return lang
+        return normalize_language_hint(lang)
     language = _non_empty_json_string(payload.get("language"))
     if language is not None:
-        return language
+        return normalize_language_hint(language)
     return None
 
 
@@ -955,6 +1028,13 @@ def _non_empty_artifact_text(value: str, path: Path) -> str:
     if not text:
         raise GoogleSheetsPipelineStoreError(f"Already-text download artifact is empty: {path}")
     return text
+
+
+def _text_from_html(raw_text: str) -> str:
+    extractor = _HtmlTextExtractor()
+    extractor.feed(raw_text)
+    extractor.close()
+    return re.sub(r"\s+", " ", " ".join(extractor.parts)).strip()
 
 
 def _translation_blocks_from_textification_object(object_value: str) -> list[JsonObject]:
@@ -987,7 +1067,17 @@ def _translation_blocks_from_textification_object(object_value: str) -> list[Jso
     detected_languages = source.get("detected_languages")
     source_language_hint = None
     if isinstance(detected_languages, list):
-        source_language_hint = next((value for value in detected_languages if isinstance(value, str) and value), None)
+        normalized_detected_languages = tuple(
+            dict.fromkeys(
+                normalized
+                for value in detected_languages
+                if isinstance(value, str)
+                if value.strip()
+                if (normalized := normalize_language_hint(value)) is not None
+            )
+        )
+        if len(normalized_detected_languages) == 1:
+            source_language_hint = normalized_detected_languages[0]
 
     blocks: list[JsonObject] = []
     for index, suggested_file in enumerate(suggested_files, start=1):
@@ -1008,6 +1098,38 @@ def _translation_blocks_from_textification_object(object_value: str) -> list[Jso
             }
         )
     return blocks
+
+
+class _HtmlTextExtractor(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        normalized_tag = tag.casefold()
+        if normalized_tag in {"noscript", "script", "style", "svg", "template"}:
+            self._skip_depth += 1
+            return
+        if normalized_tag != "meta":
+            return
+        attr_map = {key.casefold(): value for key, value in attrs if value is not None}
+        name = (attr_map.get("name") or attr_map.get("property") or "").casefold()
+        if name in {"description", "og:description", "og:title", "twitter:description", "twitter:title"}:
+            content = attr_map.get("content")
+            if content is not None and content.strip():
+                self.parts.append(content.strip())
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.casefold() in {"noscript", "script", "style", "svg", "template"} and self._skip_depth > 0:
+            self._skip_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth:
+            return
+        stripped = data.strip()
+        if stripped:
+            self.parts.append(stripped)
 
 
 def _artifact_ref_cell(ref: ArtifactRef | None) -> str:

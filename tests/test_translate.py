@@ -25,6 +25,7 @@ from curio.translate import (
     TranslationResponseError,
     TranslationService,
     counts_as_english,
+    normalize_language_hint,
 )
 
 
@@ -119,13 +120,24 @@ def test_translate_root_exports_public_service_contracts() -> None:
         "TranslationResponseError",
         "TranslationService",
         "counts_as_english",
+        "normalize_language_hint",
     ]
 
 
 def test_counts_as_english_requires_language_and_threshold() -> None:
     assert counts_as_english("en-US", 0.91, 0.9) is True
+    assert counts_as_english("English", 0.91, 0.9) is True
     assert counts_as_english("en", 0.89, 0.9) is False
     assert counts_as_english("fr", 0.99, 0.9) is False
+    assert counts_as_english("zxx", 0.99, 0.9) is False
+
+
+def test_normalize_language_hint_treats_non_language_values_as_unknown() -> None:
+    assert normalize_language_hint(None) is None
+    assert normalize_language_hint("zxx") is None
+    assert normalize_language_hint("und") is None
+    assert normalize_language_hint("English") == "en"
+    assert normalize_language_hint("en_US") == "en-us"
 
 
 def test_counts_as_english_rejects_invalid_values() -> None:

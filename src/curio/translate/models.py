@@ -12,6 +12,21 @@ TRANSLATION_REQUEST_VERSION = "curio-translation-request.v1"
 TRANSLATION_RESPONSE_VERSION = "curio-translation-response.v1"
 DEFAULT_TARGET_LANGUAGE = "en"
 DEFAULT_ENGLISH_CONFIDENCE_THRESHOLD = 0.90
+NON_LANGUAGE_HINTS = frozenset(("none", "null", "n/a", "na", "und", "undefined", "unknown", "zxx"))
+LANGUAGE_NAME_HINTS = {
+    "arabic": "ar",
+    "chinese": "zh",
+    "english": "en",
+    "french": "fr",
+    "german": "de",
+    "hindi": "hi",
+    "italian": "it",
+    "japanese": "ja",
+    "korean": "ko",
+    "portuguese": "pt",
+    "russian": "ru",
+    "spanish": "es",
+}
 
 
 class TranslationError(Exception):
@@ -87,8 +102,24 @@ def counts_as_english(detected_language: str, english_confidence: float, thresho
     _require_string(detected_language, "detected_language")
     _require_probability(english_confidence, "english_confidence")
     _require_probability(threshold, "threshold")
-    normalized_language = detected_language.casefold()
-    return (normalized_language == "en" or normalized_language.startswith("en-")) and english_confidence >= threshold
+    normalized_language = normalize_language_hint(detected_language)
+    return (
+        normalized_language is not None
+        and (normalized_language == "en" or normalized_language.startswith("en-"))
+        and english_confidence >= threshold
+    )
+
+
+def normalize_language_hint(language: str | None) -> str | None:
+    if language is None:
+        return None
+    value = _require_string(language, "language hint").strip().replace("_", "-")
+    normalized = value.casefold()
+    if normalized in NON_LANGUAGE_HINTS:
+        return None
+    if normalized in LANGUAGE_NAME_HINTS:
+        return LANGUAGE_NAME_HINTS[normalized]
+    return normalized
 
 
 @dataclass(frozen=True, slots=True)

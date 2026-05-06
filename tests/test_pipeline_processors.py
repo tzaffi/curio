@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 import curio.pipeline as pipeline
+import curio.pipeline.processors as processors_module
 from curio.llm_caller import LlmUsage
 from curio.pipeline import (
     InMemoryArtifactStore,
@@ -253,6 +254,7 @@ def test_textify_processor_records_known_unsupported_video_without_artifact_or_s
         {"mime_type": "video/mp4"},
         {"type": "Video"},
         {"column": "Video"},
+        {"type": "AnimatedGif"},
         {"name": "clip.mov"},
         {"object": "https://example.com/media/clip.webm?download=1"},
     ],
@@ -271,7 +273,19 @@ def test_textify_processor_known_unsupported_video_classifiers_skip_before_reque
 
 def test_textify_processor_requires_path() -> None:
     source_ref = ProcessRef(stage="download", tab="downloads", source="x://post/123")
-    candidate = ProcessCandidate(source_ref=source_ref, imsgx=source_ref, source="x://post/123")
+    candidate = ProcessCandidate(
+        source_ref=source_ref,
+        imsgx=source_ref,
+        source="x://post/123",
+        metadata={
+            "downloads_dir": "/tmp/downloads",
+            "expected_artifact_prefix": "imsgx-r0008-x1-image-",
+            "downloads_row": 25,
+            "column": "X1",
+            "type": "Image",
+            "object": "https://drive/object",
+        },
+    )
     store = InMemoryPipelineStore({PipelineStage.TEXTIFY.value: [candidate]})
 
     result = run_processor_once(
@@ -282,7 +296,13 @@ def test_textify_processor_requires_path() -> None:
 
     assert result.record is not None
     assert result.record.status == TextifyProcessStatus.FAILED.value
-    assert result.record.metadata["error"] == "textify candidate metadata requires path or source_ref.artifact_path"
+    assert result.record.metadata["error"].startswith("textify candidate metadata requires path or source_ref.artifact_path")
+    assert "downloads_dir=/tmp/downloads" in result.record.metadata["error"]
+    assert "expected_artifact_prefix=imsgx-r0008-x1-image-" in result.record.metadata["error"]
+    assert "downloads_row=25" in result.record.metadata["error"]
+    assert "column=X1" in result.record.metadata["error"]
+    assert "type=Image" in result.record.metadata["error"]
+    assert "object=https://drive/object" in result.record.metadata["error"]
 
 
 def test_translate_processor_translates_text_and_persists_response() -> None:
@@ -366,6 +386,94 @@ def test_translate_processor_uses_structured_blocks_and_records_already_english(
     assert result.record.output_source == candidate.source_ref
     assert artifacts.objects == {}
     assert service.requests[0].blocks[0].text == "Already English."
+
+
+def test_translate_processor_skips_clearly_english_text_without_provider_or_artifact(tmp_path: Path) -> None:
+    candidate = make_candidate(
+        {
+            "text": "Nous officially cooked with Hermes Agent. First time using a local-model agent.",
+            "name": "tweet",
+            "source_language_hint": "English",
+        }
+    )
+    service = FakeTranslationService(
+        make_translation_response(
+            TranslatedBlock(
+                block_id=1,
+                name="tweet",
+                detected_language="en",
+                english_confidence_estimate=0.99,
+                translation_required=False,
+                translated_text=None,
+            )
+        )
+    )
+    store = InMemoryPipelineStore({PipelineStage.TRANSLATE.value: [candidate]})
+
+    result = run_processor_once(TranslateProcessor(service), store=store, artifacts=LocalArtifactStore(tmp_path))
+
+    assert result.record is not None
+    assert result.record.status == TranslateProcessStatus.ALREADY_ENGLISH.value
+    assert result.record.object_ is None
+    assert result.record.output_source == candidate.source_ref
+    assert result.record.metadata == {
+        "translated_blocks": 0,
+        "warnings": ["translation skipped because candidate text is already English or URL-only"],
+    }
+    assert service.requests == []
+    assert not (tmp_path / "translations").exists()
+
+
+def test_translate_processor_skips_url_only_text_without_provider_or_artifact(tmp_path: Path) -> None:
+    candidate = make_candidate({"text": "https://t.co/f4BOUjXmF8", "name": "tweet"})
+    service = FakeTranslationService(
+        make_translation_response(
+            TranslatedBlock(
+                block_id=1,
+                name="tweet",
+                detected_language="zxx",
+                english_confidence_estimate=0,
+                translation_required=True,
+                translated_text="https://t.co/f4BOUjXmF8",
+            )
+        )
+    )
+    store = InMemoryPipelineStore({PipelineStage.TRANSLATE.value: [candidate]})
+
+    result = run_processor_once(TranslateProcessor(service), store=store, artifacts=LocalArtifactStore(tmp_path))
+
+    assert result.record is not None
+    assert result.record.status == TranslateProcessStatus.ALREADY_ENGLISH.value
+    assert result.record.object_ is None
+    assert service.requests == []
+    assert not (tmp_path / "translations").exists()
+
+
+def test_translation_url_only_helper_ignores_blank_text() -> None:
+    assert processors_module._is_url_only_text(" ") is False
+
+
+def test_translate_processor_skips_non_language_identifier_with_english_hint(tmp_path: Path) -> None:
+    candidate = make_candidate({"text": "12345", "name": "tweet", "source_language_hint": "en"})
+    service = FakeTranslationService(
+        make_translation_response(
+            TranslatedBlock(
+                block_id=1,
+                name="tweet",
+                detected_language="en",
+                english_confidence_estimate=0.99,
+                translation_required=False,
+                translated_text=None,
+            )
+        )
+    )
+    store = InMemoryPipelineStore({PipelineStage.TRANSLATE.value: [candidate]})
+
+    result = run_processor_once(TranslateProcessor(service), store=store, artifacts=LocalArtifactStore(tmp_path))
+
+    assert result.record is not None
+    assert result.record.status == TranslateProcessStatus.ALREADY_ENGLISH.value
+    assert service.requests == []
 
 
 def test_translate_processor_already_english_creates_no_local_artifact(tmp_path: Path) -> None:

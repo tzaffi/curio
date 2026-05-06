@@ -383,6 +383,11 @@ Failed records are append-only attempts. A later retry may append a new terminal
 or failed record for the same input key if the operator asks for retry behavior
 or if the scheduler policy treats failed rows as retryable.
 
+The current Google Sheets candidate sweep is stricter than that future retry
+policy: any existing processor row for the input, including `failed`, can keep
+the default next-available run from selecting it again. Operators should clean
+up the stale row manually until retry commands/policies are specified.
+
 No global `runs` table is required in v1. Per-row timestamps, processor stages,
 processor versions, caller names, and artifact refs are enough.
 

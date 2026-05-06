@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,11 +38,13 @@ from curio.translate import (
     Block,
     TranslationRequest,
     TranslationResponse,
+    normalize_language_hint,
 )
 
 TEXTIFY_PROCESSOR_VERSION = "curio-textify-processor.v1"
 TRANSLATE_PROCESSOR_VERSION = "curio-translate-processor.v1"
 UNSUPPORTED_TEXTIFY_VIDEO_EXTENSIONS = frozenset((".3gp", ".avi", ".m4v", ".mkv", ".mov", ".mp4", ".mpeg", ".mpg", ".webm"))
+URL_RE = re.compile(r"(?:https?://|www\.|t\.co/|pic\.x\.com/)\S+", re.IGNORECASE)
 
 
 class TextifyServiceBoundary(Protocol):
@@ -151,6 +154,16 @@ class TranslateProcessor(Processor):
         return store.next_candidate(self.stage)
 
     def eligibility(self, candidate: ProcessCandidate) -> Eligibility:
+        request = _translation_request_from_candidate(candidate)
+        if _deterministically_already_english(request):
+            return Eligibility(
+                eligible=False,
+                status=TranslateProcessStatus.ALREADY_ENGLISH.value,
+                metadata={
+                    "translated_blocks": 0,
+                    "warnings": ["translation skipped because candidate text is already English or URL-only"],
+                },
+            )
         return Eligibility(eligible=True, status=TranslateProcessStatus.TRANSLATED.value)
 
     def process(self, candidate: ProcessCandidate) -> ProcessOutcome:
@@ -220,7 +233,7 @@ def _textify_request_from_candidate(candidate: ProcessCandidate) -> TextifyReque
     metadata = candidate.metadata
     path = _metadata_string(metadata, "path", candidate.source_ref.artifact_path)
     if path is None:
-        raise ValueError("textify candidate metadata requires path or source_ref.artifact_path")
+        raise ValueError(_missing_textify_path_message(candidate))
     context = dict(_metadata_mapping(metadata, "context", {}))
     evidence_text = _metadata_string(metadata, "evidence_text")
     if evidence_text is not None:
@@ -249,11 +262,18 @@ def _known_unsupported_textify_reason(candidate: ProcessCandidate) -> str | None
         return "unsupported media type for textify v1: video"
     for field_name in ("type", "column"):
         value = _metadata_string(metadata, field_name)
-        if value is not None and value.strip().casefold() == "video":
+        normalized_value = "" if value is None else _compact_media_value(value)
+        if normalized_value == "video":
             return "unsupported media type for textify v1: video"
+        if normalized_value == "animatedgif":
+            return "unsupported media type for textify v1: animated gif"
     if any(_looks_like_video_resource(value) for value in _candidate_textify_identity_values(candidate)):
         return "unsupported media type for textify v1: video"
     return None
+
+
+def _compact_media_value(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.casefold())
 
 
 def _candidate_textify_identity_values(candidate: ProcessCandidate) -> tuple[str, ...]:
@@ -278,6 +298,22 @@ def _looks_like_video_resource(value: str) -> bool:
     return "/video/" in resource or any(resource.endswith(extension) for extension in UNSUPPORTED_TEXTIFY_VIDEO_EXTENSIONS)
 
 
+def _missing_textify_path_message(candidate: ProcessCandidate) -> str:
+    detail_fields = (
+        ("downloads_dir", candidate.metadata.get("downloads_dir")),
+        ("expected_artifact_prefix", candidate.metadata.get("expected_artifact_prefix")),
+        ("downloads_row", candidate.metadata.get("downloads_row", candidate.source_ref.row_number)),
+        ("column", candidate.metadata.get("column")),
+        ("type", candidate.metadata.get("type")),
+        ("object", candidate.metadata.get("object")),
+    )
+    details = ", ".join(
+        f"{name}={value}" for name, value in detail_fields if value is not None and str(value).strip()
+    )
+    base = "textify candidate metadata requires path or source_ref.artifact_path"
+    return base if not details else f"{base} ({details})"
+
+
 def _translation_request_from_candidate(candidate: ProcessCandidate) -> TranslationRequest:
     metadata = candidate.metadata
     return TranslationRequest(
@@ -291,6 +327,36 @@ def _translation_request_from_candidate(candidate: ProcessCandidate) -> Translat
         blocks=_translation_blocks_from_metadata(candidate),
         llm_caller=_metadata_string(metadata, "llm_caller"),
     )
+
+
+def _deterministically_already_english(request: TranslationRequest) -> bool:
+    return all(_block_is_deterministically_already_english(block) for block in request.blocks)
+
+
+def _block_is_deterministically_already_english(block: Block) -> bool:
+    if _is_url_only_text(block.text):
+        return True
+    source_language_hint = normalize_language_hint(block.source_language_hint)
+    if source_language_hint is None:
+        return False
+    if source_language_hint != "en" and not source_language_hint.startswith("en-"):
+        return False
+    return not _has_substantial_non_latin_text(block.text)
+
+
+def _is_url_only_text(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return False
+    return not URL_RE.sub("", stripped).strip()
+
+
+def _has_substantial_non_latin_text(text: str) -> bool:
+    letters = [char for char in text if char.isalpha()]
+    if not letters:
+        return False
+    non_latin_letters = [char for char in letters if not ("a" <= char.casefold() <= "z")]
+    return len(non_latin_letters) >= 3 and len(non_latin_letters) / len(letters) > 0.10
 
 
 def _translation_blocks_from_metadata(candidate: ProcessCandidate) -> Sequence[Block]:

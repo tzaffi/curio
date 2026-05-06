@@ -18,6 +18,7 @@ from curio.pipeline import (
     GoogleSheetsClient,
     GoogleSheetsPipelineStore,
     GoogleSheetsPipelineStoreError,
+    InMemoryArtifactStore,
     LedgerTab,
     PipelinePreviewAction,
     PipelineSelector,
@@ -25,14 +26,17 @@ from curio.pipeline import (
     ProcessorObject,
     ProcessRecord,
     ProcessRef,
+    TextifyProcessor,
     TextifyProcessStatus,
     TranslateProcessStatus,
+    run_processor_once,
 )
 from curio.pipeline.google_sheets import (
     DOWNLOAD_HEADERS,
     IMSGX_HEADERS,
     PROCESSOR_HEADERS,
 )
+from curio.textify import TextifyService
 
 
 class FakeResponse:
@@ -206,6 +210,61 @@ def test_google_sheets_store_builds_textify_candidate_from_downloads_row(tmp_pat
         "https://sheets.googleapis.com/v4/spreadsheets/spreadsheet-id",
         {"fields": "sheets(properties(sheetId,title))"},
     )
+
+
+def test_google_sheets_store_exposes_textify_missing_artifact_diagnostics(tmp_path: Path) -> None:
+    session = FakeSession(values_by_tab=base_values())
+
+    candidate = make_store(tmp_path, session).next_candidate(PipelineStage.TEXTIFY.value)
+
+    assert candidate is not None
+    assert candidate.metadata["downloads_dir"] == str(tmp_path / "downloads")
+    assert candidate.metadata["expected_artifact_prefix"] == "imsgx-r0008-x1-image-"
+    assert candidate.metadata["downloads_row"] == 2
+    assert candidate.metadata["column"] == "X1"
+    assert candidate.metadata["type"] == "Image"
+    assert candidate.metadata["object"] == "https://drive.google.com/file/d/object"
+
+
+def test_google_sheets_store_resolves_repo_zip_and_records_unsupported(tmp_path: Path) -> None:
+    downloads_dir = tmp_path / "downloads"
+    downloads_dir.mkdir()
+    repo_artifact = downloads_dir / "imsgx-r0100-x2-repo-xdevplatform-xmcp.zip"
+    repo_artifact.write_bytes(b"zip")
+    values = base_values()
+    values["downloads"][1] = [
+        "2026-04-06 23:53:05 UTC",
+        "2026-04-05 23:39:23 UTC",
+        imsgx_url(100),
+        "https://github.com/xdevplatform/xmcp.git",
+        "X2",
+        "Repo",
+        "https://drive.google.com/file/d/repo-object",
+    ]
+    session = FakeSession(values_by_tab=values)
+    store = make_store(tmp_path, session)
+
+    candidate = store.next_candidate(PipelineStage.TEXTIFY.value)
+
+    assert candidate is not None
+    assert candidate.metadata["path"] == str(repo_artifact)
+    assert candidate.metadata["mime_type"] == "application/zip"
+    assert candidate.metadata["expected_artifact_prefix"] == "imsgx-r0100-x2-repo-"
+
+    result = run_processor_once(TextifyProcessor(TextifyService()), store=store, artifacts=InMemoryArtifactStore())
+
+    assert result.record is not None
+    assert result.record.status == TextifyProcessStatus.UNSUPPORTED.value
+    assert result.record.object_ is None
+    assert session.values_by_tab["textifications"][-1] == [
+        "2026-04-06 23:53:05 UTC",
+        "2026-04-05 23:39:23 UTC",
+        imsgx_url(100),
+        "Repo",
+        downloads_url(),
+        TextifyProcessStatus.UNSUPPORTED.value,
+        "",
+    ]
 
 
 def test_google_sheets_store_skips_existing_textification_and_finds_existing_record(tmp_path: Path) -> None:
@@ -441,12 +500,31 @@ def test_google_sheets_already_text_artifact_extraction_helpers(tmp_path: Path) 
     article_path = tmp_path / "article.json"
     raw_path = tmp_path / "note.txt"
     empty_path = tmp_path / "empty.txt"
+    html_path = tmp_path / "page.html"
     article_path.write_text(json.dumps({"article": {"plain_text": " Article body. "}}), encoding="utf-8")
     raw_path.write_text(" Raw text file. ", encoding="utf-8")
     empty_path.write_text(" ", encoding="utf-8")
+    html_path.write_text(
+        """
+        <html>
+          <head>
+            <title>Useful Page</title>
+            <meta name="description" content="Helpful summary.">
+            <script>not useful</script>
+          </head>
+          <body><h1>Main Heading</h1><p>Readable body.</p></body>
+        </html>
+        """,
+        encoding="utf-8",
+    )
 
     assert google_sheets_module._text_from_artifact(article_path).text == "Article body."
     assert google_sheets_module._text_from_artifact(raw_path).text == "Raw text file."
+    assert google_sheets_module._text_from_artifact(html_path) == google_sheets_module._ExtractedText(
+        "Useful Page Helpful summary. Main Heading Readable body.",
+        None,
+        "html_text",
+    )
     assert google_sheets_module._text_from_json_mapping(
         {
             "article": {
@@ -462,6 +540,35 @@ def test_google_sheets_already_text_artifact_extraction_helpers(tmp_path: Path) 
         None,
         "article.title_preview_text",
     )
+    assert google_sheets_module._text_from_json_mapping(
+        {
+            "lang": "zxx",
+            "text": "https://t.co/f4BOUjXmF8",
+            "parent": {"text": "GOOGLE QUIETLY LAUNCHED OFFLINE AI DICTATION APP", "lang": "en"},
+        }
+    ) == google_sheets_module._ExtractedText(
+        "GOOGLE QUIETLY LAUNCHED OFFLINE AI DICTATION APP",
+        "en",
+        "parent.text",
+    )
+    assert google_sheets_module._text_from_json_mapping(
+        {
+            "lang": "zxx",
+            "text": "https://t.co/f4BOUjXmF8",
+            "card": {
+                "binding_values": {
+                    "title": {"string_value": "GitHub - google-ai-edge/gallery"},
+                    "description": {"string_value": "A gallery that showcases on-device ML/GenAI use cases."},
+                }
+            },
+        }
+    ) == google_sheets_module._ExtractedText(
+        "GitHub - google-ai-edge/gallery",
+        None,
+        "card.title",
+    )
+    assert google_sheets_module._text_from_json_mapping({"card": {}}) is None
+    assert google_sheets_module._is_url_only_text(" ") is False
     assert google_sheets_module._text_from_json_mapping(
         {"article": {"title": "Already complete.", "preview_text": "Already complete. More text."}}
     ) == google_sheets_module._ExtractedText(
@@ -701,6 +808,31 @@ def test_google_sheets_store_uses_default_block_names_when_missing_suggested_pat
     )
 
     assert google_sheets_module._translation_blocks_from_textification_object(str(textification_object))[0]["name"] == "textification_1"
+
+
+def test_google_sheets_store_normalizes_textification_detected_language_names(tmp_path: Path) -> None:
+    textification_object = tmp_path / "textification.json"
+    textification_object.write_text(
+        json.dumps(
+            {
+                "object": {
+                    "source": {
+                        "detected_languages": ["English"],
+                        "suggested_files": [{"suggested_path": "note.md", "text": "Already English."}],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert google_sheets_module._translation_blocks_from_textification_object(str(textification_object))[0] == {
+        "block_id": 1,
+        "name": "note.md",
+        "source_language_hint": "en",
+        "text": "Already English.",
+        "context": {"textification_object": str(textification_object)},
+    }
 
 
 def test_google_sheets_store_defensive_branches_and_factory(
