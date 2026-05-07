@@ -127,7 +127,7 @@ class TextifyProcessor(Processor):
         outcome: PersistedOutcome,
         store: PipelineStore,
     ) -> ProcessRecord:
-        return store.append_record(
+        return store.stage_record(
             ProcessRecord(
                 stage=self.stage,
                 ledger_tab=self.ledger_tab,
@@ -214,7 +214,7 @@ class TranslateProcessor(Processor):
         outcome: PersistedOutcome,
         store: PipelineStore,
     ) -> ProcessRecord:
-        return store.append_record(
+        return store.stage_record(
             ProcessRecord(
                 stage=self.stage,
                 ledger_tab=self.ledger_tab,

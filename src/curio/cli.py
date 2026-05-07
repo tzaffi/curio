@@ -23,9 +23,10 @@ from curio.llm_caller import (
 )
 from curio.pipeline import (
     PROGRESSING_PROCESSOR_RUN_STATUSES,
+    ArtifactStore,
+    GoogleDriveArtifactStore,
     GoogleSheetsPipelineStore,
     GoogleSheetsPipelineStoreError,
-    LocalArtifactStore,
     PipelinePreviewItem,
     PipelineRunResult,
     PipelineSelector,
@@ -215,7 +216,7 @@ def _run_pipeline_stage(
     except (ConfigError, GoogleSheetsPipelineStoreError, LlmCallerError, TextifyError, TranslationError, ValueError, OSError) as exc:
         _fail_runtime(str(exc))
     store = _build_pipeline_store_from_config(config, PipelineSelector())
-    artifacts = LocalArtifactStore.from_config(config.pipeline_config)
+    artifacts = _build_artifact_store_from_config(config)
     try:
         with _pipeline_progress_callback(stage=stage, total=limit) as progress_callback:
             result = run_stage(
@@ -225,9 +226,19 @@ def _run_pipeline_stage(
                 limit=limit,
                 progress_callback=progress_callback,
             )
-    except (GoogleSheetsPipelineStoreError, LlmCallerError, TextifyError, TranslationError, ValueError, OSError) as exc:
+    except (GoogleApiError, GoogleSheetsPipelineStoreError, LlmCallerError, TextifyError, TranslationError, ValueError, OSError) as exc:
         _fail_runtime(str(exc))
     _write_output(_render_pipeline_run_result(result), None)
+
+
+def _build_artifact_store_from_config(config: CurioConfig) -> ArtifactStore:
+    try:
+        return GoogleDriveArtifactStore.from_config(
+            google_config=config.google_config,
+            pipeline_config=config.pipeline_config,
+        )
+    except (GoogleApiError, OSError, RuntimeError, ValueError) as exc:
+        _fail_runtime(str(exc))
 
 
 @contextmanager

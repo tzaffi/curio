@@ -10,6 +10,7 @@ from curio.config import (
     GoogleConfig,
     KeychainLocator,
     PipelineConfig,
+    PipelineDriveFoldersConfig,
     PipelineTabsConfig,
 )
 from curio.google_api import GoogleApiError
@@ -138,6 +139,10 @@ def pipeline_config(downloads_dir: Path) -> PipelineConfig:
     return PipelineConfig(
         downloads_dir=downloads_dir,
         spreadsheet_id="spreadsheet-id",
+        drive_folders=PipelineDriveFoldersConfig(
+            textifications="folder-textifications",
+            translations="folder-translations",
+        ),
         tabs=PipelineTabsConfig(
             imsgx="iMsgX",
             downloads="downloads",
@@ -156,7 +161,7 @@ def downloads_url(row_number: int = 2) -> str:
 
 
 def textification_url(row_number: int = 2) -> str:
-    return f"https://docs.google.com/spreadsheets/d/spreadsheet-id/edit#gid=333&range=A{row_number}:G{row_number}"
+    return f"https://docs.google.com/spreadsheets/d/spreadsheet-id/edit#gid=333&range=A{row_number}:H{row_number}"
 
 
 def base_values(*, textifications: list[list[str]] | None = None, translations: list[list[str]] | None = None) -> dict[str, list[list[str]]]:
@@ -256,6 +261,7 @@ def test_google_sheets_store_resolves_repo_zip_and_records_unsupported(tmp_path:
     assert result.record is not None
     assert result.record.status == TextifyProcessStatus.UNSUPPORTED.value
     assert result.record.object_ is None
+    store.flush_records()
     assert session.values_by_tab["textifications"][-1] == [
         "2026-04-06 23:53:05 UTC",
         "2026-04-05 23:39:23 UTC",
@@ -263,6 +269,7 @@ def test_google_sheets_store_resolves_repo_zip_and_records_unsupported(tmp_path:
         "Repo",
         downloads_url(),
         TextifyProcessStatus.UNSUPPORTED.value,
+        "",
         "",
     ]
 
@@ -277,6 +284,7 @@ def test_google_sheets_store_skips_existing_textification_and_finds_existing_rec
             "Image",
             downloads_url(),
             TextifyProcessStatus.CONVERTED.value,
+            "",
             "/tmp/textification.json",
         ],
     ]
@@ -296,7 +304,70 @@ def test_google_sheets_store_skips_existing_textification_and_finds_existing_rec
     assert record.object_.path == "/tmp/textification.json"
 
 
-def test_google_sheets_store_appends_textification_rows_with_raw_insert(tmp_path: Path) -> None:
+def test_google_sheets_store_reads_legacy_object_local_path_without_local_column(tmp_path: Path) -> None:
+    legacy_headers = list(google_sheets_module.PROCESSOR_REQUIRED_HEADERS)
+    textifications = [
+        legacy_headers,
+        [
+            "2026-04-01 12:00:00 UTC",
+            "2026-04-01 12:00:01 UTC",
+            imsgx_url(),
+            "Image",
+            downloads_url(),
+            TextifyProcessStatus.CONVERTED.value,
+            "/tmp/textification.json",
+        ],
+    ]
+    store = make_store(tmp_path, FakeSession(values_by_tab=base_values(textifications=textifications)))
+    candidate = store._textify_candidate(store._downloads[0])
+
+    record = store.existing_record(
+        stage=PipelineStage.TEXTIFY.value,
+        ledger_tab=LedgerTab.TEXTIFICATIONS.value,
+        version="processor-v1",
+        candidate=candidate,
+    )
+
+    assert record is not None
+    assert record.object_ is not None
+    assert record.object_.path == "/tmp/textification.json"
+
+
+def test_google_sheets_store_flushes_required_only_processor_rows_with_object_local_path(tmp_path: Path) -> None:
+    required_headers = list(google_sheets_module.PROCESSOR_REQUIRED_HEADERS)
+    session = FakeSession(values_by_tab=base_values(textifications=[required_headers]))
+    store = make_store(tmp_path, session)
+    candidate = store._textify_candidate(store._downloads[0])
+    record = ProcessRecord(
+        stage=PipelineStage.TEXTIFY.value,
+        ledger_tab=LedgerTab.TEXTIFICATIONS.value,
+        version="processor-v1",
+        source_ref=candidate.source_ref,
+        imsgx=candidate.imsgx,
+        status=TextifyProcessStatus.CONVERTED.value,
+        object_=ArtifactRef(kind="textify_object", mime_type="application/json", path="/tmp/textification.json"),
+    )
+
+    post_call_count = sum(1 for call in session.calls if call[0] == "POST")
+    store.stage_record(record)
+
+    assert sum(1 for call in session.calls if call[0] == "POST") == post_call_count
+    store.flush_records()
+    assert session.calls[-1][1] == (
+        "https://sheets.googleapis.com/v4/spreadsheets/spreadsheet-id/values/%27textifications%27%21A%3AG:append"
+    )
+    assert session.values_by_tab["textifications"][-1] == [
+        "2026-04-01 12:00:00 UTC",
+        "2026-04-01 12:00:01 UTC",
+        imsgx_url(),
+        "Image",
+        downloads_url(),
+        TextifyProcessStatus.CONVERTED.value,
+        "/tmp/textification.json",
+    ]
+
+
+def test_google_sheets_store_flushes_staged_textification_rows_with_raw_insert(tmp_path: Path) -> None:
     session = FakeSession(values_by_tab=base_values())
     store = make_store(tmp_path, session)
     candidate = store._textify_candidate(store._downloads[0])
@@ -310,11 +381,15 @@ def test_google_sheets_store_appends_textification_rows_with_raw_insert(tmp_path
         object_=ArtifactRef(kind="textify_object", mime_type="application/json", path="/tmp/textification.json"),
     )
 
-    assert store.append_record(record) == record
+    post_call_count = sum(1 for call in session.calls if call[0] == "POST")
+    assert store.stage_record(record) == record
+    assert sum(1 for call in session.calls if call[0] == "POST") == post_call_count
+
+    store.flush_records()
 
     method, url, payload = session.calls[-1]
     assert method == "POST"
-    assert url == "https://sheets.googleapis.com/v4/spreadsheets/spreadsheet-id/values/%27textifications%27%21A%3AG:append"
+    assert url == "https://sheets.googleapis.com/v4/spreadsheets/spreadsheet-id/values/%27textifications%27%21A%3AH:append"
     assert payload == {
         "params": {"valueInputOption": "RAW", "insertDataOption": "INSERT_ROWS"},
         "json": {
@@ -327,6 +402,7 @@ def test_google_sheets_store_appends_textification_rows_with_raw_insert(tmp_path
                     "Image",
                     downloads_url(),
                     TextifyProcessStatus.CONVERTED.value,
+                    "",
                     "/tmp/textification.json",
                 ]
             ],
@@ -334,13 +410,140 @@ def test_google_sheets_store_appends_textification_rows_with_raw_insert(tmp_path
     }
 
 
-def test_google_sheets_store_initializes_empty_processor_tab_before_append(tmp_path: Path) -> None:
+def test_google_sheets_store_flushes_multiple_staged_rows_in_one_request(tmp_path: Path) -> None:
+    values = base_values()
+    values["iMsgX"].append(["2026-04-01 12:01:00 UTC", "2026-04-01 12:01:00 UTC", "message 2", "", "", "", "", "", ""])
+    values["downloads"].append(
+        [
+            "2026-04-01 12:01:00 UTC",
+            "2026-04-01 12:01:01 UTC",
+            imsgx_url(9),
+            "https://x.com/example/status/204",
+            "X1",
+            "Image",
+            "https://drive.google.com/file/d/object-2",
+        ]
+    )
+    session = FakeSession(values_by_tab=values)
+    store = make_store(tmp_path, session)
+    first = store.next_candidate(PipelineStage.TEXTIFY.value)
+    assert first is not None
+    first_record = ProcessRecord(
+        stage=PipelineStage.TEXTIFY.value,
+        ledger_tab=LedgerTab.TEXTIFICATIONS.value,
+        version="processor-v1",
+        source_ref=first.source_ref,
+        imsgx=first.imsgx,
+        status=TextifyProcessStatus.NO_TEXT.value,
+    )
+
+    store.stage_record(first_record)
+    second = store.next_candidate(PipelineStage.TEXTIFY.value)
+    assert second is not None
+    second_record = ProcessRecord(
+        stage=PipelineStage.TEXTIFY.value,
+        ledger_tab=LedgerTab.TEXTIFICATIONS.value,
+        version="processor-v1",
+        source_ref=second.source_ref,
+        imsgx=second.imsgx,
+        status=TextifyProcessStatus.NO_TEXT.value,
+    )
+    post_call_count = sum(1 for call in session.calls if call[0] == "POST")
+
+    store.stage_record(second_record)
+
+    assert store.existing_record(
+        stage=PipelineStage.TEXTIFY.value,
+        ledger_tab=LedgerTab.TEXTIFICATIONS.value,
+        version="processor-v1",
+        candidate=second,
+    ) is not None
+    assert sum(1 for call in session.calls if call[0] == "POST") == post_call_count
+
+    store.flush_records()
+
+    post_calls = [call for call in session.calls if call[0] == "POST"]
+    assert len(post_calls) == 1
+    payload = post_calls[0][2]
+    assert isinstance(payload, dict)
+    assert payload["json"]["values"] == session.values_by_tab["textifications"][-2:]
+
+
+def test_google_sheets_store_discards_staged_rows(tmp_path: Path) -> None:
+    session = FakeSession(values_by_tab=base_values())
+    store = make_store(tmp_path, session)
+    candidate = store.next_candidate(PipelineStage.TEXTIFY.value)
+    assert candidate is not None
+    record = ProcessRecord(
+        stage=PipelineStage.TEXTIFY.value,
+        ledger_tab=LedgerTab.TEXTIFICATIONS.value,
+        version="processor-v1",
+        source_ref=candidate.source_ref,
+        imsgx=candidate.imsgx,
+        status=TextifyProcessStatus.NO_TEXT.value,
+    )
+
+    store.stage_record(record)
+    assert store.existing_record(
+        stage=PipelineStage.TEXTIFY.value,
+        ledger_tab=LedgerTab.TEXTIFICATIONS.value,
+        version="processor-v1",
+        candidate=candidate,
+    ) is not None
+
+    store.discard_staged_records()
+
+    assert store.existing_record(
+        stage=PipelineStage.TEXTIFY.value,
+        ledger_tab=LedgerTab.TEXTIFICATIONS.value,
+        version="processor-v1",
+        candidate=candidate,
+    ) is None
+    assert not any(call[0] == "POST" for call in session.calls)
+
+
+def test_google_sheets_store_preserves_processor_header_order_on_flush(tmp_path: Path) -> None:
+    processor_headers = ["Status", "Source", "Object", "Local", "Date", "X Date", "iMsgX", "Type"]
+    session = FakeSession(values_by_tab=base_values(textifications=[processor_headers]))
+    store = make_store(tmp_path, session)
+    candidate = store._textify_candidate(store._downloads[0])
+    record = ProcessRecord(
+        stage=PipelineStage.TEXTIFY.value,
+        ledger_tab=LedgerTab.TEXTIFICATIONS.value,
+        version="processor-v1",
+        source_ref=candidate.source_ref,
+        imsgx=candidate.imsgx,
+        status=TextifyProcessStatus.CONVERTED.value,
+        object_=ArtifactRef(
+            kind="textify_object",
+            mime_type="application/json",
+            url="https://drive/object",
+            path="/tmp/textification.json",
+        ),
+    )
+
+    store.stage_record(record)
+    store.flush_records()
+
+    assert session.values_by_tab["textifications"][-1] == [
+        TextifyProcessStatus.CONVERTED.value,
+        downloads_url(),
+        "https://drive/object",
+        "/tmp/textification.json",
+        "2026-04-01 12:00:00 UTC",
+        "2026-04-01 12:00:01 UTC",
+        imsgx_url(),
+        "Image",
+    ]
+
+
+def test_google_sheets_store_initializes_empty_processor_tab_before_staging(tmp_path: Path) -> None:
     session = FakeSession(values_by_tab=base_values(textifications=[]))
     store = make_store(tmp_path, session)
     candidate = store.next_candidate(PipelineStage.TEXTIFY.value)
     assert candidate is not None
 
-    store.append_record(
+    store.stage_record(
         ProcessRecord(
             stage=PipelineStage.TEXTIFY.value,
             ledger_tab=LedgerTab.TEXTIFICATIONS.value,
@@ -351,14 +554,15 @@ def test_google_sheets_store_initializes_empty_processor_tab_before_append(tmp_p
         )
     )
 
-    assert session.calls[-2] == (
+    assert session.calls[-1] == (
         "PUT",
-        "https://sheets.googleapis.com/v4/spreadsheets/spreadsheet-id/values/%27textifications%27%21A1%3AG1",
+        "https://sheets.googleapis.com/v4/spreadsheets/spreadsheet-id/values/%27textifications%27%21A1%3AH1",
         {
             "params": {"valueInputOption": "RAW"},
             "json": {"majorDimension": "ROWS", "values": [list(PROCESSOR_HEADERS)]},
         },
     )
+    store.flush_records()
     assert session.calls[-1][0] == "POST"
     assert session.values_by_tab["textifications"][0] == list(PROCESSOR_HEADERS)
     assert session.values_by_tab["textifications"][1] == [
@@ -368,6 +572,7 @@ def test_google_sheets_store_initializes_empty_processor_tab_before_append(tmp_p
         "Image",
         downloads_url(),
         TextifyProcessStatus.NO_TEXT.value,
+        "",
         "",
     ]
 
@@ -403,6 +608,7 @@ def test_google_sheets_store_builds_translate_candidate_from_textification_objec
             "Image",
             downloads_url(),
             TextifyProcessStatus.CONVERTED.value,
+            "",
             str(textification_object),
         ],
     ]
@@ -423,7 +629,7 @@ def test_google_sheets_store_builds_translate_candidate_from_textification_objec
     ]
 
 
-def test_google_sheets_store_appends_translation_rows_from_textification_source(tmp_path: Path) -> None:
+def test_google_sheets_store_flushes_staged_translation_rows_from_textification_source(tmp_path: Path) -> None:
     textifications = [
         list(PROCESSOR_HEADERS),
         [
@@ -433,6 +639,7 @@ def test_google_sheets_store_appends_translation_rows_from_textification_source(
             "Image",
             downloads_url(),
             TextifyProcessStatus.ALREADY_TEXT.value,
+            "",
             "",
         ],
     ]
@@ -451,7 +658,8 @@ def test_google_sheets_store_appends_translation_rows_from_textification_source(
         status=TranslateProcessStatus.ALREADY_ENGLISH.value,
     )
 
-    store.append_record(record)
+    store.stage_record(record)
+    store.flush_records()
 
     assert session.values_by_tab["translations"][-1] == [
         "2026-04-01 12:00:00 UTC",
@@ -460,6 +668,7 @@ def test_google_sheets_store_appends_translation_rows_from_textification_source(
         "Image",
         textification_url(),
         TranslateProcessStatus.ALREADY_ENGLISH.value,
+        "",
         "",
     ]
 
@@ -643,8 +852,8 @@ def test_google_sheets_store_resolves_refs_and_rejects_bad_inputs(tmp_path: Path
     assert store.resolve_ref(ProcessRef(stage="unknown", tab="missing", source="source", row_number=4)).row_url is None
     with pytest.raises(GoogleSheetsPipelineStoreError, match="unsupported pipeline stage"):
         store.next_candidate("dossier")
-    with pytest.raises(GoogleSheetsPipelineStoreError, match="unsupported append ledger tab"):
-        store.append_record(
+    with pytest.raises(GoogleSheetsPipelineStoreError, match="unsupported stage ledger tab"):
+        store.stage_record(
             ProcessRecord(
                 stage=PipelineStage.TEXTIFY.value,
                 ledger_tab="dossiers",
@@ -679,8 +888,41 @@ def test_google_sheets_store_validates_tabs_and_headers(tmp_path: Path) -> None:
 
     values = base_values()
     values["textifications"] = [["bad"]]
-    with pytest.raises(GoogleSheetsPipelineStoreError, match="header must exactly match"):
+    with pytest.raises(GoogleSheetsPipelineStoreError, match="header must include"):
         make_store(tmp_path, FakeSession(values_by_tab=values))
+
+
+def test_google_sheets_processor_header_and_cell_helper_branches(tmp_path: Path) -> None:
+    with pytest.raises(GoogleSheetsPipelineStoreError, match="must have header"):
+        google_sheets_module._validate_processor_header([], tab_name="textifications")
+
+    with pytest.raises(GoogleSheetsPipelineStoreError, match="duplicate column"):
+        google_sheets_module._validate_processor_header([list(PROCESSOR_HEADERS) + ["Object"]], tab_name="textifications")
+
+    assert google_sheets_module._row_cell(["value"], ["A", "B"], "B") == ""
+    with pytest.raises(ValueError, match="positive"):
+        google_sheets_module._column_name(0)
+
+    parsed_row_url = google_sheets_module._parse_google_row_url(
+        "https://docs.google.com/spreadsheets/d/spreadsheet-id/edit#gid=333&range=A2:G2"
+    )
+    assert parsed_row_url is not None
+    assert google_sheets_module._google_row_urls_match(parsed_row_url, textification_url())
+
+    assert google_sheets_module._legacy_artifact_ref_cell(None) == ""
+    assert (
+        google_sheets_module._legacy_artifact_ref_cell(
+            ArtifactRef(kind="textify_object", mime_type="application/json", url="https://drive/object")
+        )
+        == "https://drive/object"
+    )
+    assert (
+        google_sheets_module._legacy_artifact_ref_cell(
+            ArtifactRef(kind="textify_object", mime_type="application/json", path="/tmp/textification.json")
+        )
+        == "/tmp/textification.json"
+    )
+    assert google_sheets_module._last_column_for_tab("textifications", pipeline_config(tmp_path / "downloads")) == "H"
 
 
 def test_google_sheets_client_rejects_invalid_payloads_and_http_errors() -> None:
@@ -754,6 +996,7 @@ def test_google_sheets_store_rejects_unreadable_textification_objects(tmp_path: 
             "Image",
             downloads_url(),
             TextifyProcessStatus.CONVERTED.value,
+            "",
             str(textification_object),
         ],
     ]
@@ -915,7 +1158,7 @@ def test_google_sheets_store_defensive_branches_and_factory(
             candidate=candidate,
         )
     with pytest.raises(GoogleSheetsPipelineStoreError, match="unknown downloads source"):
-        store.append_record(
+        store.stage_record(
             ProcessRecord(
                 stage=PipelineStage.TEXTIFY.value,
                 ledger_tab=LedgerTab.TEXTIFICATIONS.value,
@@ -926,7 +1169,7 @@ def test_google_sheets_store_defensive_branches_and_factory(
             )
         )
     with pytest.raises(GoogleSheetsPipelineStoreError, match="unknown textification source"):
-        store.append_record(
+        store.stage_record(
             ProcessRecord(
                 stage=PipelineStage.TRANSLATE.value,
                 ledger_tab=LedgerTab.TRANSLATIONS.value,
@@ -937,7 +1180,7 @@ def test_google_sheets_store_defensive_branches_and_factory(
             )
         )
     with pytest.raises(GoogleSheetsPipelineStoreError, match="unsupported record stage"):
-        store.append_record(
+        store.stage_record(
             ProcessRecord(
                 stage="custom",
                 ledger_tab=LedgerTab.TEXTIFICATIONS.value,
@@ -1038,6 +1281,7 @@ def test_google_sheets_store_translate_candidate_skips_existing_translation(tmp_
             textification_url(),
             TranslateProcessStatus.TRANSLATED.value,
             "https://drive/translation",
+            "",
         ],
     ]
     store = make_store(
@@ -1142,6 +1386,7 @@ def test_google_sheets_store_previews_existing_textify_record(tmp_path: Path) ->
             "Image",
             downloads_url(),
             TextifyProcessStatus.CONVERTED.value,
+            "",
             "/tmp/textification.json",
         ],
     ]
@@ -1256,7 +1501,7 @@ def test_google_sheets_helper_fallbacks(tmp_path: Path) -> None:
     assert google_sheets_module._last_column_for_tab("iMsgX", config) == "I"
 
 
-def test_google_sheets_store_uses_fallback_row_number_when_append_response_omits_range(tmp_path: Path) -> None:
+def test_google_sheets_store_uses_fallback_row_number_when_flush_response_omits_range(tmp_path: Path) -> None:
     class NoRangeSession(FakeSession):
         def post(self, url: str, *, params: Mapping[str, str], json: Mapping[str, object]) -> FakeResponse:
             self.calls.append(("POST", url, {"params": dict(params), "json": dict(json)}))
@@ -1270,7 +1515,7 @@ def test_google_sheets_store_uses_fallback_row_number_when_append_response_omits
     store = make_store(tmp_path, session)
     candidate = store.next_candidate(PipelineStage.TEXTIFY.value)
     assert candidate is not None
-    store.append_record(
+    store.stage_record(
         ProcessRecord(
             stage=PipelineStage.TEXTIFY.value,
             ledger_tab=LedgerTab.TEXTIFICATIONS.value,
@@ -1281,6 +1526,8 @@ def test_google_sheets_store_uses_fallback_row_number_when_append_response_omits
         )
     )
 
+    assert store._textifications[-1].row_number == 2
+    store.flush_records()
     assert store._textifications[-1].row_number == 2
 
 
@@ -1301,6 +1548,8 @@ def test_google_sheets_store_can_persist_objects_through_real_processor_shape(tm
         object_=ArtifactRef(kind="textify_object", mime_type=object_.mime_type, url="https://drive/object"),
     )
 
-    store.append_record(record)
+    store.stage_record(record)
+    store.flush_records()
 
-    assert session.values_by_tab["textifications"][-1][-1] == "https://drive/object"
+    assert session.values_by_tab["textifications"][-1][-2] == "https://drive/object"
+    assert session.values_by_tab["textifications"][-1][-1] == ""

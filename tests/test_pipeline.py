@@ -91,7 +91,10 @@ def test_pipeline_root_exports_contracts() -> None:
         "GoogleSheetsClient",
         "GoogleSheetsPipelineStore",
         "GoogleSheetsPipelineStoreError",
-        "LocalArtifactStore",
+        "GoogleDriveArtifactStore",
+        "GoogleDriveClient",
+        "DriveFile",
+        "GOOGLE_DRIVE_SCOPE",
         "PipelineSelector",
         "PipelineRunResult",
         "PipelineProgressCallback",
@@ -385,9 +388,15 @@ class FakeStore:
         assert candidate == self.candidate
         return None
 
-    def append_record(self, record: ProcessRecord) -> ProcessRecord:
+    def stage_record(self, record: ProcessRecord) -> ProcessRecord:
         self.records.append(record)
         return record
+
+    def flush_records(self) -> None:
+        return None
+
+    def discard_staged_records(self) -> None:
+        self.records.clear()
 
     def resolve_ref(self, ref: ProcessRef) -> ProcessRef:
         return ref
@@ -461,7 +470,7 @@ class ConcreteProcessor(Processor):
         outcome: PersistedOutcome,
         store: FakeStore,
     ) -> ProcessRecord:
-        return store.append_record(
+        return store.stage_record(
             ProcessRecord(
                 stage=self.stage,
                 ledger_tab=self.ledger_tab,

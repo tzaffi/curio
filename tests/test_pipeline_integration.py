@@ -174,14 +174,14 @@ class OfflineArtifactThroughStore(InMemoryPipelineStore):
         self._artifacts = artifacts
         self._textify_candidates = {candidate.source_ref: candidate for candidate in textify_candidates}
 
-    def append_record(self, record: ProcessRecord) -> ProcessRecord:
-        appended = super().append_record(record)
+    def stage_record(self, record: ProcessRecord) -> ProcessRecord:
+        staged = super().stage_record(record)
         if record.stage == PipelineStage.TEXTIFY.value and record.output_source is not None:
             self.add_candidate(
                 PipelineStage.TRANSLATE.value,
                 _translate_candidate_from_textify_record(record, self._textify_candidates[record.source_ref], self._artifacts),
             )
-        return appended
+        return staged
 
 
 def _suggested_output_format(suggested_path: str, expected_output_format: str) -> str:

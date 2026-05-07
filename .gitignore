@@ -212,3 +212,4 @@ tmp/*
 
 config.json
 *-BUG-REPORT*.md
+*-FEATURE-REQUEST*.md

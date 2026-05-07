@@ -5,6 +5,7 @@ from typing import Final
 
 from curio.pipeline.memory import FAILED_STATUS
 from curio.pipeline.models import (
+    ArtifactRef,
     ArtifactStore,
     LedgerTab,
     PersistedOutcome,
@@ -13,6 +14,7 @@ from curio.pipeline.models import (
     ProcessCandidate,
     Processor,
     ProcessRecord,
+    ProcessRef,
 )
 
 SUPPORTED_PIPELINE_STAGES: Final = frozenset({PipelineStage.TEXTIFY.value, PipelineStage.TRANSLATE.value})
@@ -77,39 +79,34 @@ def run_processor_once(
             existing_record=existing_record,
         )
 
+    discard_object_on_stage_failure = False
+
     try:
         eligibility = processor.eligibility(candidate)
         if not eligibility.eligible:
-            record = processor.record(
-                candidate,
-                PersistedOutcome(
-                    status=eligibility.status,
-                    output_source=candidate.source_ref,
-                    metadata=eligibility.metadata,
-                ),
-                store,
+            persisted = PersistedOutcome(
+                status=eligibility.status,
+                output_source=candidate.source_ref,
+                metadata=eligibility.metadata,
             )
-            return ProcessorRunResult(
+        else:
+            existing_object = artifacts.existing_object(
                 stage=processor.stage,
-                status=ProcessorRunStatus.RECORDED,
+                ledger_tab=processor.ledger_tab,
+                version=processor.version,
                 candidate=candidate,
-                record=record,
             )
-
-        outcome = processor.process(candidate)
-        persisted = processor.persist(candidate, outcome, artifacts)
-        try:
-            record = processor.record(candidate, persisted, store)
-        except Exception:
-            if persisted.object_ is not None:
-                artifacts.discard_object(persisted.object_)
-            raise
-        return ProcessorRunResult(
-            stage=processor.stage,
-            status=ProcessorRunStatus.RECORDED,
-            candidate=candidate,
-            record=record,
-        )
+            if existing_object is not None:
+                persisted = PersistedOutcome(
+                    status=eligibility.status,
+                    object_=existing_object,
+                    output_source=_artifact_output_ref(processor, candidate, existing_object),
+                    metadata=eligibility.metadata,
+                )
+            else:
+                outcome = processor.process(candidate)
+                persisted = processor.persist(candidate, outcome, artifacts)
+                discard_object_on_stage_failure = persisted.object_ is not None
     except Exception as exc:
         record = processor.record(candidate, _failed_outcome(exc), store)
         return ProcessorRunResult(
@@ -118,6 +115,18 @@ def run_processor_once(
             candidate=candidate,
             record=record,
         )
+    try:
+        record = processor.record(candidate, persisted, store)
+    except Exception:
+        if discard_object_on_stage_failure and persisted.object_ is not None:
+            artifacts.discard_object(persisted.object_)
+        raise
+    return ProcessorRunResult(
+        stage=processor.stage,
+        status=ProcessorRunStatus.RECORDED,
+        candidate=candidate,
+        record=record,
+    )
 
 
 def run_stage(
@@ -132,12 +141,17 @@ def run_stage(
         raise ValueError("limit must be a positive integer")
 
     results: list[ProcessorRunResult] = []
-    for _ in range(limit):
-        result = run_processor_once(processor, store=store, artifacts=artifacts)
-        results.append(result)
-        _notify_progress(progress_callback, result)
-        if result.status not in PROGRESSING_PROCESSOR_RUN_STATUSES:
-            break
+    try:
+        for _ in range(limit):
+            result = run_processor_once(processor, store=store, artifacts=artifacts)
+            results.append(result)
+            _notify_progress(progress_callback, result)
+            if result.status not in PROGRESSING_PROCESSOR_RUN_STATUSES:
+                break
+        store.flush_records()
+    except Exception:
+        _discard_current_run(results, store=store, artifacts=artifacts)
+        raise
     return PipelineRunResult(
         iterations=sum(result.status in PROGRESSING_PROCESSOR_RUN_STATUSES for result in results),
         processor_results=tuple(results),
@@ -161,16 +175,21 @@ def run_artifact_through(
 
     results: list[ProcessorRunResult] = []
     iterations = 0
-    for _ in range(limit):
-        iteration_results: list[ProcessorRunResult] = []
-        for processor in processors:
-            result = run_processor_once(processor, store=store, artifacts=artifacts)
-            results.append(result)
-            iteration_results.append(result)
-            _notify_progress(progress_callback, result)
-        if not any(result.status in PROGRESSING_PROCESSOR_RUN_STATUSES for result in iteration_results):
-            break
-        iterations += 1
+    try:
+        for _ in range(limit):
+            iteration_results: list[ProcessorRunResult] = []
+            for processor in processors:
+                result = run_processor_once(processor, store=store, artifacts=artifacts)
+                results.append(result)
+                iteration_results.append(result)
+                _notify_progress(progress_callback, result)
+            if not any(result.status in PROGRESSING_PROCESSOR_RUN_STATUSES for result in iteration_results):
+                break
+            iterations += 1
+        store.flush_records()
+    except Exception:
+        _discard_current_run(results, store=store, artifacts=artifacts)
+        raise
 
     return PipelineRunResult(iterations=iterations, processor_results=tuple(results))
 
@@ -183,6 +202,18 @@ def _notify_progress(
         progress_callback(result)
 
 
+def _discard_current_run(
+    results: Sequence[ProcessorRunResult],
+    *,
+    store: PipelineStore,
+    artifacts: ArtifactStore,
+) -> None:
+    for result in results:
+        if result.status == ProcessorRunStatus.RECORDED and result.record is not None and result.record.object_ is not None:
+            artifacts.discard_object(result.record.object_)
+    store.discard_staged_records()
+
+
 def _validate_supported_processor(processor: Processor) -> None:
     processor.validate_identity()
     if processor.stage not in SUPPORTED_PIPELINE_STAGES:
@@ -193,6 +224,17 @@ def _validate_supported_processor(processor: Processor) -> None:
     }
     if processor.ledger_tab != expected_tabs[processor.stage]:
         raise ValueError(f"ledger_tab does not match stage {processor.stage}: {processor.ledger_tab}")
+
+
+def _artifact_output_ref(processor: Processor, candidate: ProcessCandidate, artifact: ArtifactRef) -> ProcessRef:
+    return ProcessRef(
+        stage=processor.stage,
+        tab=processor.ledger_tab,
+        source=candidate.source,
+        artifact_url=artifact.url,
+        artifact_path=artifact.path,
+        artifact_sha256=artifact.sha256,
+    )
 
 
 def _failed_outcome(exc: Exception) -> PersistedOutcome:

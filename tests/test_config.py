@@ -12,6 +12,7 @@ from curio.config import (
     KeychainLocator,
     LlmCallerPromptConfig,
     PipelineConfig,
+    PipelineDriveFoldersConfig,
     PipelineTabsConfig,
     TextifyConfig,
     TranslateConfig,
@@ -58,6 +59,10 @@ def pipeline_payload(downloads_dir: str, artifact_root: str | None) -> dict[str,
         "downloads_dir": downloads_dir,
         "artifact_root": artifact_root,
         "spreadsheet_id": "spreadsheet-id",
+        "drive_folders": {
+            "textifications": "textifications-folder",
+            "translations": "translations-folder",
+        },
         "tabs": {
             "imsgx": "iMsgX",
             "downloads": "downloads",
@@ -73,6 +78,18 @@ def pipeline_config(downloads_dir: Path, artifact_root: Path | None = None) -> P
         artifact_root=artifact_root,
         spreadsheet_id="spreadsheet-id",
         tabs=pipeline_tabs_config(),
+        drive_folders=drive_folders_config(),
+    )
+
+
+def drive_folders_config(
+    *,
+    textifications: str = "replace-with-textifications-drive-folder-id",
+    translations: str = "replace-with-translations-drive-folder-id",
+) -> PipelineDriveFoldersConfig:
+    return PipelineDriveFoldersConfig(
+        textifications=textifications,
+        translations=translations,
     )
 
 
@@ -109,6 +126,7 @@ def test_checked_in_codex_example_config_parses() -> None:
         downloads_dir=(Path.home() / "Desktop/iMsgX/downloads").resolve(strict=False),
         spreadsheet_id="replace-with-google-sheets-id",
         tabs=pipeline_tabs_config(),
+        drive_folders=drive_folders_config(),
     )
     assert config.google_config == google_config(repo_root() / "replace-with-google-oauth-client.json")
     assert config.pipeline_config.effective_artifact_root == (Path.home() / "Desktop/iMsgX").resolve(strict=False)
@@ -341,6 +359,24 @@ def test_load_config_parses_required_pipeline_config_and_overrides(
     assert config.google_config.oauth_client_credentials_path == home_dir / "google-oauth-client.json"
 
 
+def test_load_config_parses_drive_folders_config(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    payload = json.loads((repo_root() / "config.example.codex_cli.json").read_text(encoding="utf-8"))
+    pipeline = cast(dict[str, object], payload["pipeline"])
+    pipeline["drive_folders"] = {
+        "textifications": "textifications-folder",
+        "translations": "translations-folder",
+    }
+    write_config(config_path, payload)
+
+    config = load_config(config_path)
+
+    assert config.pipeline_config.drive_folders == PipelineDriveFoldersConfig(
+        textifications="textifications-folder",
+        translations="translations-folder",
+    )
+
+
 def test_load_config_resolves_relative_config_path_from_current_directory(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -396,18 +432,66 @@ def test_load_config_rejects_invalid_pipeline_config(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="pipeline.artifact_root"):
         load_config(config_path)
 
+    payload["pipeline"] = pipeline_payload("downloads", None)
+    del payload["pipeline"]["drive_folders"]
+    write_config(config_path, payload)
+    with pytest.raises(ConfigError, match="pipeline.drive_folders"):
+        load_config(config_path)
+
+    payload["pipeline"] = pipeline_payload("downloads", None)
+    cast(dict[str, object], payload["pipeline"])["drive_folders"] = "bad"
+    write_config(config_path, payload)
+    with pytest.raises(ConfigError, match="pipeline.drive_folders"):
+        load_config(config_path)
+
+    payload["pipeline"] = pipeline_payload("downloads", None)
+    cast(dict[str, object], payload["pipeline"])["drive_folders"] = {
+        "textifications": "",
+        "translations": "translations-folder",
+    }
+    write_config(config_path, payload)
+    with pytest.raises(ConfigError, match="drive_folders.textifications"):
+        load_config(config_path)
+
+    payload["pipeline"] = pipeline_payload("downloads", None)
+    cast(dict[str, object], payload["pipeline"])["drive_folders"] = {
+        "textifications": "textifications-folder",
+        "translations": "",
+    }
+    write_config(config_path, payload)
+    with pytest.raises(ConfigError, match="drive_folders.translations"):
+        load_config(config_path)
+
     with pytest.raises(ConfigError, match="PipelineConfig"):
         CurioConfig(llm_callers={}, google_config=google_config(tmp_path / "client.json"), pipeline_config="bad")
     with pytest.raises(ConfigError, match="pipeline.downloads_dir"):
-        PipelineConfig(downloads_dir="bad", spreadsheet_id="spreadsheet-id", tabs=pipeline_tabs_config())  # type: ignore[arg-type]
+        PipelineConfig(
+            downloads_dir="bad",  # type: ignore[arg-type]
+            spreadsheet_id="spreadsheet-id",
+            tabs=pipeline_tabs_config(),
+            drive_folders=drive_folders_config(),
+        )
     with pytest.raises(ConfigError, match="pipeline.tabs"):
-        PipelineConfig(downloads_dir=tmp_path / "downloads", spreadsheet_id="spreadsheet-id", tabs="bad")  # type: ignore[arg-type]
+        PipelineConfig(
+            downloads_dir=tmp_path / "downloads",
+            spreadsheet_id="spreadsheet-id",
+            tabs="bad",  # type: ignore[arg-type]
+            drive_folders=drive_folders_config(),
+        )
     with pytest.raises(ConfigError, match="pipeline.artifact_root"):
         PipelineConfig(
             downloads_dir=tmp_path / "downloads",
             artifact_root="bad",  # type: ignore[arg-type]
             spreadsheet_id="spreadsheet-id",
             tabs=pipeline_tabs_config(),
+            drive_folders=drive_folders_config(),
+        )
+    with pytest.raises(ConfigError, match="pipeline.drive_folders"):
+        PipelineConfig(
+            downloads_dir=tmp_path / "downloads",
+            spreadsheet_id="spreadsheet-id",
+            tabs=pipeline_tabs_config(),
+            drive_folders="bad",  # type: ignore[arg-type]
         )
 
 

@@ -2,7 +2,7 @@ import json
 import mimetypes
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Final, Self, cast
@@ -10,7 +10,7 @@ from urllib.parse import quote
 
 from curio.config import GoogleConfig, PipelineConfig
 from curio.google_api import (
-    GOOGLE_SHEETS_SCOPE,
+    GOOGLE_PIPELINE_SCOPES,
     GoogleSession,
     build_authorized_session,
     raise_for_status,
@@ -43,7 +43,8 @@ IMSGX_HEADERS: Final = (
     "X3 Source ID",
 )
 DOWNLOAD_HEADERS: Final = ("Date", "X Date", "iMsgX", "Source", "Column", "Type", "Object")
-PROCESSOR_HEADERS: Final = ("Date", "X Date", "iMsgX", "Type", "Source", "Status", "Object")
+PROCESSOR_HEADERS: Final = ("Date", "X Date", "iMsgX", "Type", "Source", "Status", "Object", "Local")
+PROCESSOR_REQUIRED_HEADERS: Final = ("Date", "X Date", "iMsgX", "Type", "Source", "Status", "Object")
 _ROW_URL_RE: Final = re.compile(r"docs\.google\.com/spreadsheets/d/([^/]+)/edit#gid=(\d+)&range=[A-Z]+(\d+)")
 _UPDATED_RANGE_ROW_RE: Final = re.compile(r"![A-Z]+(\d+):")
 _SLUG_RE: Final = re.compile(r"[^a-z0-9]+")
@@ -97,6 +98,13 @@ class _ProcessorRow:
     source: str
     status: str
     object_value: str
+    local_value: str
+
+
+@dataclass(frozen=True, slots=True)
+class _StagedProcessorRow:
+    values: tuple[str, ...]
+    processor_row: _ProcessorRow
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,6 +208,8 @@ class GoogleSheetsPipelineStore:
         self._sheet_ids = dict(self.client.read_sheet_ids())
         self._require_sheet_ids()
         self._empty_processor_tabs: set[str] = set()
+        self._processor_headers: dict[str, tuple[str, ...]] = {}
+        self._staged_processor_rows: dict[str, list[_StagedProcessorRow]] = {}
         self._validate_imsgx_header()
         self._downloads = self._read_download_rows()
         self._textifications = self._read_processor_rows(config.tabs.textifications)
@@ -213,7 +223,7 @@ class GoogleSheetsPipelineStore:
         pipeline_config: PipelineConfig,
         selector: PipelineSelector | None = None,
     ) -> Self:
-        session = build_authorized_session(google_config, scopes=[GOOGLE_SHEETS_SCOPE])
+        session = build_authorized_session(google_config, scopes=GOOGLE_PIPELINE_SCOPES)
         return cls(session=session, config=pipeline_config, selector=selector)
 
     def next_candidate(self, stage: str) -> ProcessCandidate | None:
@@ -251,29 +261,48 @@ class GoogleSheetsPipelineStore:
             return self._process_record_from_row(stage=stage, ledger_tab=ledger_tab, version=version, row=row)
         return None
 
-    def append_record(self, record: ProcessRecord) -> ProcessRecord:
+    def stage_record(self, record: ProcessRecord) -> ProcessRecord:
         if record.ledger_tab not in {self.config.tabs.textifications, self.config.tabs.translations}:
-            raise GoogleSheetsPipelineStoreError(f"unsupported append ledger tab: {record.ledger_tab}")
+            raise GoogleSheetsPipelineStoreError(f"unsupported stage ledger tab: {record.ledger_tab}")
 
-        row = self._record_values(record)
         self._ensure_processor_header(record.ledger_tab)
-        appended_row_number = self.client.append_values(
-            sheet_name=record.ledger_tab,
-            coordinates="A:G",
-            values=[row],
-        )
+        row = self._record_values(record)
+        headers = self._processor_headers_for_tab(record.ledger_tab)
         processor_row = _ProcessorRow(
-            row_number=appended_row_number or self._next_local_processor_row_number(record.ledger_tab),
-            date=row[0],
-            x_date=row[1],
-            imsgx=row[2],
-            type_=row[3],
-            source=row[4],
-            status=row[5],
-            object_value=row[6],
+            row_number=self._next_local_processor_row_number(record.ledger_tab),
+            date=_row_cell(row, headers, "Date"),
+            x_date=_row_cell(row, headers, "X Date"),
+            imsgx=_row_cell(row, headers, "iMsgX"),
+            type_=_row_cell(row, headers, "Type"),
+            source=_row_cell(row, headers, "Source"),
+            status=_row_cell(row, headers, "Status"),
+            object_value=_row_cell(row, headers, "Object"),
+            local_value=_processor_local_value(row, headers),
         )
         self._processor_rows_for_tab(record.ledger_tab).append(processor_row)
+        self._staged_processor_rows.setdefault(record.ledger_tab, []).append(
+            _StagedProcessorRow(values=tuple(row), processor_row=processor_row)
+        )
         return record
+
+    def flush_records(self) -> None:
+        for tab, staged_rows in list(self._staged_processor_rows.items()):
+            headers = self._processor_headers_for_tab(tab)
+            appended_row_number = self.client.append_values(
+                sheet_name=tab,
+                coordinates=f"A:{_column_name(len(headers))}",
+                values=[staged.values for staged in staged_rows],
+            )
+            if appended_row_number is not None:
+                self._renumber_staged_processor_rows(tab, staged_rows, first_row_number=appended_row_number)
+            del self._staged_processor_rows[tab]
+
+    def discard_staged_records(self) -> None:
+        for tab, staged_rows in self._staged_processor_rows.items():
+            rows = self._processor_rows_for_tab(tab)
+            for staged in reversed(staged_rows):
+                rows.remove(staged.processor_row)
+        self._staged_processor_rows.clear()
 
     def resolve_ref(self, ref: ProcessRef) -> ProcessRef:
         if ref.row_url is not None or ref.row_number is None:
@@ -290,7 +319,7 @@ class GoogleSheetsPipelineStore:
                 spreadsheet_id=self.config.spreadsheet_id,
                 sheet_id=sheet_id,
                 row_number=ref.row_number,
-                last_column=_last_column_for_tab(ref.tab, self.config),
+                last_column=self._last_column_for_tab(ref.tab),
             ),
             spreadsheet_id=ref.spreadsheet_id,
             sheet_id=ref.sheet_id,
@@ -484,9 +513,11 @@ class GoogleSheetsPipelineStore:
             "textification_row": textification.row_number,
             "context": context,
         }
-        artifact_key = textification.object_value or None
+        artifact_key = textification.local_value or textification.object_value or None
         if textification.status == TextifyProcessStatus.CONVERTED.value:
-            metadata["blocks"] = _translation_blocks_from_textification_object(textification.object_value)
+            object_ref = textification.local_value or textification.object_value
+            metadata["blocks"] = _translation_blocks_from_textification_object(object_ref)
+            artifact_key = object_ref or artifact_key
         else:
             local_path = self._local_download_path(download)
             extracted = _already_text_download_text(download, local_path=local_path)
@@ -542,7 +573,7 @@ class GoogleSheetsPipelineStore:
             spreadsheet_id=self.config.spreadsheet_id,
             sheet_id=self._sheet_ids[tab],
             artifact_url=row.object_value if _is_url(row.object_value) else None,
-            artifact_path=row.object_value if Path(row.object_value).is_absolute() else None,
+            artifact_path=_processor_artifact_path(row),
         )
 
     def _process_record_from_row(
@@ -570,14 +601,7 @@ class GoogleSheetsPipelineStore:
                 spreadsheet_id=self.config.spreadsheet_id,
             ),
             status=row.status,
-            object_=None
-            if not row.object_value
-            else ArtifactRef(
-                kind=f"{stage}_object",
-                mime_type="application/json",
-                url=row.object_value if _is_url(row.object_value) else None,
-                path=None if _is_url(row.object_value) else row.object_value,
-            ),
+            object_=_artifact_ref_from_processor_row(stage=stage, row=row),
             metadata={
                 "date": row.date,
                 "x_date": row.x_date,
@@ -590,7 +614,7 @@ class GoogleSheetsPipelineStore:
         if record.stage == PipelineStage.TEXTIFY.value:
             source_row = self._download_for_ref(record.source_ref)
             if source_row is None:
-                raise GoogleSheetsPipelineStoreError("cannot append textification row for unknown downloads source")
+                raise GoogleSheetsPipelineStoreError("cannot stage textification row for unknown downloads source")
             date = source_row.date
             x_date = source_row.x_date
             imsgx = source_row.imsgx
@@ -598,7 +622,7 @@ class GoogleSheetsPipelineStore:
         elif record.stage == PipelineStage.TRANSLATE.value:
             source_row = self._processor_row_for_ref(self._textifications, record.source_ref)
             if source_row is None:
-                raise GoogleSheetsPipelineStoreError("cannot append translation row for unknown textification source")
+                raise GoogleSheetsPipelineStoreError("cannot stage translation row for unknown textification source")
             date = source_row.date
             x_date = source_row.x_date
             imsgx = source_row.imsgx
@@ -606,15 +630,20 @@ class GoogleSheetsPipelineStore:
         else:
             raise GoogleSheetsPipelineStoreError(f"unsupported record stage: {record.stage}")
 
-        return [
-            date,
-            x_date,
-            imsgx,
-            type_,
-            record.source_ref.row_url or record.source_ref.source,
-            record.status,
-            _artifact_ref_cell(record.object_),
-        ]
+        headers = self._processor_headers_for_tab(record.ledger_tab)
+        values = {
+            "Date": date,
+            "X Date": x_date,
+            "iMsgX": imsgx,
+            "Type": type_,
+            "Source": record.source_ref.row_url or record.source_ref.source,
+            "Status": record.status,
+            "Object": _artifact_url_cell(record.object_),
+            "Local": _artifact_path_cell(record.object_),
+        }
+        if "Local" not in headers:
+            values["Object"] = _legacy_artifact_ref_cell(record.object_)
+        return [values.get(header, "") for header in headers]
 
     def _validate_imsgx_header(self) -> None:
         values = self.client.read_values(sheet_name=self.config.tabs.imsgx, coordinates="A:I")
@@ -643,26 +672,29 @@ class GoogleSheetsPipelineStore:
         return rows
 
     def _read_processor_rows(self, tab_name: str) -> list[_ProcessorRow]:
-        values = self.client.read_values(sheet_name=tab_name, coordinates="A:G")
+        values = self.client.read_values(sheet_name=tab_name, coordinates="A:Z")
         if not values:
             self._empty_processor_tabs.add(tab_name)
+            self._processor_headers[tab_name] = PROCESSOR_HEADERS
             return []
-        _validate_header(values, PROCESSOR_HEADERS, tab_name=tab_name)
+        header = _validate_processor_header(values, tab_name=tab_name)
+        self._processor_headers[tab_name] = header
         rows: list[_ProcessorRow] = []
         for row_number, raw_row in enumerate(values[1:], start=2):
-            row = _normalize_row(raw_row, width=len(PROCESSOR_HEADERS))
+            row = _normalize_row(raw_row, width=len(header))
             if not any(value.strip() for value in row):
                 continue
             rows.append(
                 _ProcessorRow(
                     row_number=row_number,
-                    date=row[0],
-                    x_date=row[1],
-                    imsgx=row[2],
-                    type_=row[3],
-                    source=row[4],
-                    status=row[5],
-                    object_value=row[6],
+                    date=_row_cell(row, header, "Date"),
+                    x_date=_row_cell(row, header, "X Date"),
+                    imsgx=_row_cell(row, header, "iMsgX"),
+                    type_=_row_cell(row, header, "Type"),
+                    source=_row_cell(row, header, "Source"),
+                    status=_row_cell(row, header, "Status"),
+                    object_value=_row_cell(row, header, "Object"),
+                    local_value=_processor_local_value(row, header),
                 )
             )
         return rows
@@ -672,8 +704,8 @@ class GoogleSheetsPipelineStore:
             return
         self.client.update_values(
             sheet_name=tab_name,
-            coordinates="A1:G1",
-            values=[PROCESSOR_HEADERS],
+            coordinates=f"A1:{_column_name(len(PROCESSOR_HEADERS))}1",
+            values=[self._processor_headers_for_tab(tab_name)],
         )
         self._empty_processor_tabs.remove(tab_name)
 
@@ -763,11 +795,32 @@ class GoogleSheetsPipelineStore:
             spreadsheet_id=self.config.spreadsheet_id,
             sheet_id=self._sheet_ids[tab],
             row_number=row_number,
-            last_column=_last_column_for_tab(tab, self.config),
+            last_column=self._last_column_for_tab(tab),
         )
+
+    def _last_column_for_tab(self, tab: str) -> str:
+        if tab in {self.config.tabs.textifications, self.config.tabs.translations}:
+            return _column_name(len(self._processor_headers_for_tab(tab)))
+        return _last_column_for_tab(tab, self.config)
+
+    def _processor_headers_for_tab(self, tab: str) -> tuple[str, ...]:
+        return self._processor_headers.get(tab, PROCESSOR_HEADERS)
 
     def _next_local_processor_row_number(self, tab: str) -> int:
         return len(self._processor_rows_for_tab(tab)) + 2
+
+    def _renumber_staged_processor_rows(
+        self,
+        tab: str,
+        staged_rows: Sequence[_StagedProcessorRow],
+        *,
+        first_row_number: int,
+    ) -> None:
+        rows = self._processor_rows_for_tab(tab)
+        for offset, staged in enumerate(staged_rows):
+            index = rows.index(staged.processor_row)
+            updated_row = replace(staged.processor_row, row_number=first_row_number + offset)
+            rows[index] = updated_row
 
 
 def _validate_header(values: Sequence[Sequence[str]], expected: Sequence[str], *, tab_name: str) -> None:
@@ -782,10 +835,58 @@ def _validate_header(values: Sequence[Sequence[str]], expected: Sequence[str], *
         )
 
 
+def _validate_processor_header(values: Sequence[Sequence[str]], *, tab_name: str) -> tuple[str, ...]:
+    if not values:
+        raise GoogleSheetsPipelineStoreError(
+            f"Configured Google Sheet tab '{tab_name}' must have header: " + ", ".join(PROCESSOR_HEADERS)
+        )
+    header = tuple(str(value) for value in values[0])
+    missing = [column for column in PROCESSOR_REQUIRED_HEADERS if column not in header]
+    if missing:
+        raise GoogleSheetsPipelineStoreError(
+            f"Configured Google Sheet tab '{tab_name}' header must include: " + ", ".join(PROCESSOR_REQUIRED_HEADERS)
+        )
+    duplicates = sorted({column for column in header if header.count(column) > 1})
+    if duplicates:
+        raise GoogleSheetsPipelineStoreError(
+            f"Configured Google Sheet tab '{tab_name}' header has duplicate column(s): " + ", ".join(duplicates)
+        )
+    return header
+
+
 def _normalize_row(row: Sequence[str], *, width: int) -> list[str]:
     normalized = [str(value) for value in row[:width]]
     normalized.extend([""] * (width - len(normalized)))
     return normalized
+
+
+def _row_cell(row: Sequence[str], header: Sequence[str], column: str) -> str:
+    try:
+        index = tuple(header).index(column)
+    except ValueError:
+        return ""
+    if index >= len(row):
+        return ""
+    return row[index]
+
+
+def _processor_local_value(row: Sequence[str], header: Sequence[str]) -> str:
+    local_value = _row_cell(row, header, "Local")
+    if "Local" in header:
+        return local_value
+    object_value = _row_cell(row, header, "Object")
+    return object_value if Path(object_value).is_absolute() else ""
+
+
+def _column_name(index: int) -> str:
+    if index < 1:
+        raise ValueError("column index must be positive")
+    name = ""
+    value = index
+    while value:
+        value, remainder = divmod(value - 1, 26)
+        name = chr(ord("A") + remainder) + name
+    return name
 
 
 def _sheet_range(sheet_name: str, coordinates: str) -> str:
@@ -824,7 +925,23 @@ def _visible_source_matches_ref(value: str, ref: ProcessRef) -> bool:
         candidates.add(ref.artifact_url)
     if ref.artifact_path is not None:
         candidates.add(ref.artifact_path)
-    return value in candidates
+    if value in candidates:
+        return True
+    parsed_value = _parse_google_row_url(value)
+    if parsed_value is None:
+        return False
+    return any(_google_row_urls_match(parsed_value, candidate) for candidate in candidates)
+
+
+def _google_row_urls_match(parsed_value: Mapping[str, JsonValue], candidate: str) -> bool:
+    parsed_candidate = _parse_google_row_url(candidate)
+    if parsed_candidate is None:
+        return False
+    return (
+        parsed_value["spreadsheet_id"] == parsed_candidate["spreadsheet_id"]
+        and parsed_value["sheet_id"] == parsed_candidate["sheet_id"]
+        and parsed_value["row_number"] == parsed_candidate["row_number"]
+    )
 
 
 def _source_ref_from_visible_source(*, stage: str, tab: str, source: str, spreadsheet_id: str) -> ProcessRef:
@@ -1132,7 +1249,7 @@ class _HtmlTextExtractor(HTMLParser):
             self.parts.append(stripped)
 
 
-def _artifact_ref_cell(ref: ArtifactRef | None) -> str:
+def _legacy_artifact_ref_cell(ref: ArtifactRef | None) -> str:
     if ref is None:
         return ""
     if ref.url is not None:
@@ -1142,9 +1259,36 @@ def _artifact_ref_cell(ref: ArtifactRef | None) -> str:
     return ""  # pragma: no cover - ArtifactRef validation requires url or path.
 
 
+def _artifact_url_cell(ref: ArtifactRef | None) -> str:
+    return "" if ref is None or ref.url is None else ref.url
+
+
+def _artifact_path_cell(ref: ArtifactRef | None) -> str:
+    return "" if ref is None or ref.path is None else ref.path
+
+
+def _processor_artifact_path(row: _ProcessorRow) -> str | None:
+    return row.local_value if row.local_value and Path(row.local_value).is_absolute() else None
+
+
+def _artifact_ref_from_processor_row(*, stage: str, row: _ProcessorRow) -> ArtifactRef | None:
+    artifact_url = row.object_value if _is_url(row.object_value) else None
+    artifact_path = _processor_artifact_path(row)
+    if artifact_url is None and artifact_path is None:
+        return None
+    return ArtifactRef(
+        kind=f"{stage}_object",
+        mime_type="application/json",
+        url=artifact_url,
+        path=artifact_path,
+    )
+
+
 def _last_column_for_tab(tab: str, config: PipelineConfig) -> str:
     if tab == config.tabs.imsgx:
         return "I"
+    if tab in {config.tabs.textifications, config.tabs.translations}:
+        return "H"
     return "G"
 
 

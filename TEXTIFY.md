@@ -56,16 +56,18 @@ files by itself.
 When used by `TextifyProcessor` in the Curio pipeline:
 
 - input candidates come from `downloads`
-- converted responses are persisted as one textification JSON object in the
-  `textifications/` Google Drive folder before the `textifications` row is
-  appended
+- converted responses are persisted as one local textification JSON object and
+  uploaded or reused in the `textifications/` Google Drive folder before the
+  `textifications` row is appended
 - suggested files are represented inside that JSON object
-- a converted row stores that Drive link in `Object`
+- a converted row stores the Drive link in `Object` and the local path in
+  `Local`
 - every textification row and persisted artifact preserves the immediate source
   ref and the root `iMsgX` row ref
-- an already-text row uses `Status = already_text` and leaves `Object` blank
+- an already-text row uses `Status = already_text` and leaves `Object` and
+  `Local` blank
 - unsupported or no-text media use `Status = unsupported` or `Status = no_text`
-  and leave `Object` blank
+  and leave `Object` and `Local` blank
 
 Skipped text media should not create duplicate dossier evidence blocks. The
 downstream dossier snapshot should consume the passthrough ref instead.

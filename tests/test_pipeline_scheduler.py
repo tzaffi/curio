@@ -4,14 +4,13 @@ from pathlib import Path
 import pytest
 
 import curio.pipeline as pipeline
-from curio.config import PipelineConfig, PipelineTabsConfig
+from curio.config import PipelineConfig, PipelineDriveFoldersConfig, PipelineTabsConfig
 from curio.pipeline import (
     ArtifactRef,
     Eligibility,
     InMemoryArtifactStore,
     InMemoryPipelineStore,
     LedgerTab,
-    LocalArtifactStore,
     PersistedOutcome,
     PipelineStage,
     PipelineStore,
@@ -28,6 +27,7 @@ from curio.pipeline import (
     run_processor_once,
     run_stage,
 )
+from curio.pipeline.local import LocalArtifactStore
 
 DEFAULT_ARTIFACT_KEY = object()
 
@@ -90,6 +90,7 @@ class StageProcessor(Processor):
         self.skip_status = skip_status
         self.fail_sources = set() if fail_sources is None else fail_sources
         self.enqueue_translate = enqueue_translate
+        self.processed: list[ProcessCandidate] = []
 
     def next_candidate(self, store: PipelineStore) -> ProcessCandidate | None:
         return store.next_candidate(self.stage)
@@ -102,6 +103,7 @@ class StageProcessor(Processor):
         )
 
     def process(self, candidate: ProcessCandidate) -> ProcessOutcome:
+        self.processed.append(candidate)
         if candidate.source in self.fail_sources:
             raise RuntimeError(f"planned failure for {candidate.source}")
         return ProcessOutcome(
@@ -137,7 +139,7 @@ class StageProcessor(Processor):
         outcome: PersistedOutcome,
         store: PipelineStore,
     ) -> ProcessRecord:
-        record = store.append_record(
+        record = store.stage_record(
             ProcessRecord(
                 stage=self.stage,
                 ledger_tab=self.ledger_tab,
@@ -164,18 +166,23 @@ class StageProcessor(Processor):
         return record
 
 
-class FailingConvertedAppendStore(InMemoryPipelineStore):
-    def append_record(self, record: ProcessRecord) -> ProcessRecord:
+class FailingConvertedStageStore(InMemoryPipelineStore):
+    def stage_record(self, record: ProcessRecord) -> ProcessRecord:
         if record.status == TextifyProcessStatus.CONVERTED.value:
-            raise RuntimeError("record append exploded")
-        return super().append_record(record)
+            raise RuntimeError("record stage exploded")
+        return super().stage_record(record)
+
+
+class FailingFlushStore(InMemoryPipelineStore):
+    def flush_records(self) -> None:
+        raise RuntimeError("record flush exploded")
 
 
 class StaticExistingStore:
     def __init__(self, candidate: ProcessCandidate, record: ProcessRecord) -> None:
         self.candidate = candidate
         self.record = record
-        self.appended: list[ProcessRecord] = []
+        self.staged: list[ProcessRecord] = []
 
     def next_candidate(self, stage: str) -> ProcessCandidate | None:
         return self.candidate
@@ -192,9 +199,15 @@ class StaticExistingStore:
         assert (stage, ledger_tab, version) == (self.record.stage, self.record.ledger_tab, self.record.version)
         return self.record
 
-    def append_record(self, record: ProcessRecord) -> ProcessRecord:
-        self.appended.append(record)
+    def stage_record(self, record: ProcessRecord) -> ProcessRecord:
+        self.staged.append(record)
         return record
+
+    def flush_records(self) -> None:
+        return None
+
+    def discard_staged_records(self) -> None:
+        self.staged.clear()
 
     def resolve_ref(self, ref: ProcessRef) -> ProcessRef:
         return ref
@@ -225,7 +238,8 @@ def test_in_memory_store_selects_unhandled_candidates_and_skips_failures_by_defa
         imsgx=first.imsgx,
         status=TextifyProcessStatus.FAILED.value,
     )
-    store.append_record(failed_record)
+    store.stage_record(failed_record)
+    store.flush_records()
 
     assert store.existing_record(
         stage=PipelineStage.TEXTIFY.value,
@@ -244,7 +258,8 @@ def test_in_memory_store_selects_unhandled_candidates_and_skips_failures_by_defa
         imsgx=second.imsgx,
         status=TextifyProcessStatus.CONVERTED.value,
     )
-    store.append_record(terminal_record)
+    store.stage_record(terminal_record)
+    store.flush_records()
 
     assert store.existing_record(
         stage=PipelineStage.TEXTIFY.value,
@@ -322,6 +337,77 @@ def test_local_artifact_store_writes_textify_artifact_from_imsgx_source_stem(tmp
     assert first_ref.size_bytes == persisted_path.stat().st_size
     assert first_ref.source_ref == candidate.source_ref
     assert first_ref.imsgx == candidate.imsgx
+
+
+def test_local_artifact_store_reuses_existing_artifact_path_without_content_check(tmp_path: Path) -> None:
+    candidate = make_candidate(
+        artifact_path="/Users/zeph/Desktop/iMsgX/downloads/imsgx-r0008-x1-image-203-photo-1.png"
+    )
+    first_payload = {
+        "textify_response_version": "curio-textify-response.v1",
+        "request_id": "textify-original",
+        "source": {
+            "source_sha256": "source-sha",
+            "suggested_files": [{"suggested_path": "source.md", "output_format": "markdown", "text": "# Hello"}],
+            "warnings": ["faint text"],
+        },
+        "llm": {
+            "provider": "codex_cli",
+            "model": "gpt-test",
+            "usage": {
+                "started_at": "2026-05-06T00:00:00Z",
+                "completed_at": "2026-05-06T00:00:01Z",
+                "wall_seconds": 1,
+                "input_tokens": 10,
+                "output_tokens": 5,
+            },
+            "cost_estimate": {"amount": 0.01, "currency": "USD"},
+        },
+        "warnings": [],
+    }
+    changed_payload = {
+        **first_payload,
+        "request_id": "textify-repeat",
+        "source": {
+            "source_sha256": "different-source-sha",
+            "suggested_files": [{"suggested_path": "source.md", "output_format": "markdown", "text": "# Changed"}],
+            "warnings": ["changed warning"],
+        },
+        "llm": {
+            "provider": "codex_cli",
+            "model": "gpt-test",
+            "usage": {
+                "started_at": "2026-05-06T00:01:00Z",
+                "completed_at": "2026-05-06T00:01:03Z",
+                "wall_seconds": 3,
+                "input_tokens": 11,
+                "output_tokens": 5,
+            },
+            "cost_estimate": {"amount": 0.02, "currency": "USD"},
+        },
+    }
+    store = LocalArtifactStore(tmp_path)
+
+    first_ref = store.persist_object(
+        stage=PipelineStage.TEXTIFY.value,
+        ledger_tab=LedgerTab.TEXTIFICATIONS.value,
+        version="processor-v1",
+        candidate=candidate,
+        object_=ProcessorObject(payload=first_payload),
+    )
+    second_ref = store.persist_object(
+        stage=PipelineStage.TEXTIFY.value,
+        ledger_tab=LedgerTab.TEXTIFICATIONS.value,
+        version="processor-v1",
+        candidate=candidate,
+        object_=ProcessorObject(payload=changed_payload),
+    )
+
+    assert second_ref == first_ref
+    assert first_ref.path is not None
+    persisted = json.loads(Path(first_ref.path).read_text(encoding="utf-8"))
+    assert persisted["object"]["request_id"] == "textify-original"
+    assert persisted["object"]["llm"]["usage"]["wall_seconds"] == 1
 
 
 def test_local_artifact_store_discards_only_objects_created_by_current_store(tmp_path: Path) -> None:
@@ -409,12 +495,12 @@ def test_local_artifact_store_uses_hash_filename_when_source_identity_is_missing
     assert persisted_path.name.endswith(".json")
 
 
-def test_local_artifact_store_rejects_changed_content_for_same_path(tmp_path: Path) -> None:
+def test_local_artifact_store_reuses_existing_artifact_for_same_path(tmp_path: Path) -> None:
     candidate = make_candidate(
         artifact_path="/Users/zeph/Desktop/iMsgX/downloads/imsgx-r0008-x1-image-203-photo-1.png"
     )
     store = LocalArtifactStore(tmp_path)
-    store.persist_object(
+    first_ref = store.persist_object(
         stage=PipelineStage.TEXTIFY.value,
         ledger_tab=LedgerTab.TEXTIFICATIONS.value,
         version="processor-v1",
@@ -422,14 +508,45 @@ def test_local_artifact_store_rejects_changed_content_for_same_path(tmp_path: Pa
         object_=ProcessorObject(payload={"text": "hello"}),
     )
 
-    with pytest.raises(FileExistsError, match="different content"):
-        store.persist_object(
-            stage=PipelineStage.TEXTIFY.value,
-            ledger_tab=LedgerTab.TEXTIFICATIONS.value,
-            version="processor-v1",
-            candidate=candidate,
-            object_=ProcessorObject(payload={"text": "changed"}),
-        )
+    second_ref = store.persist_object(
+        stage=PipelineStage.TEXTIFY.value,
+        ledger_tab=LedgerTab.TEXTIFICATIONS.value,
+        version="processor-v1",
+        candidate=candidate,
+        object_=ProcessorObject(payload={"text": "changed"}),
+    )
+
+    assert second_ref == first_ref
+    assert first_ref.path is not None
+    persisted = json.loads(Path(first_ref.path).read_text(encoding="utf-8"))
+    assert persisted["object"] == {"text": "hello"}
+
+
+def test_run_processor_once_records_existing_local_artifact_without_processing(tmp_path: Path) -> None:
+    candidate = make_candidate(
+        artifact_path="/Users/zeph/Desktop/iMsgX/downloads/imsgx-r0008-x1-image-203-photo-1.png"
+    )
+    artifacts = LocalArtifactStore(tmp_path)
+    existing_ref = artifacts.persist_object(
+        stage=PipelineStage.TEXTIFY.value,
+        ledger_tab=LedgerTab.TEXTIFICATIONS.value,
+        version="processor-v1",
+        candidate=candidate,
+        object_=ProcessorObject(payload={"text": "existing"}),
+    )
+    processor = StageProcessor()
+    store = InMemoryPipelineStore({PipelineStage.TEXTIFY.value: [candidate]})
+
+    result = run_processor_once(processor, store=store, artifacts=artifacts)
+
+    assert processor.processed == []
+    assert result.status == ProcessorRunStatus.RECORDED
+    assert result.record is not None
+    assert result.record.status == TextifyProcessStatus.CONVERTED.value
+    assert result.record.object_ == existing_ref
+    assert result.record.output_source is not None
+    assert result.record.output_source.artifact_path == existing_ref.path
+    assert result.record.metadata == {"source": candidate.source}
 
 
 def test_local_artifact_store_uses_pipeline_config_effective_artifact_root(tmp_path: Path) -> None:
@@ -437,6 +554,10 @@ def test_local_artifact_store_uses_pipeline_config_effective_artifact_root(tmp_p
         PipelineConfig(
             downloads_dir=tmp_path / "downloads",
             spreadsheet_id="spreadsheet-id",
+            drive_folders=PipelineDriveFoldersConfig(
+                textifications="folder-textifications",
+                translations="folder-translations",
+            ),
             tabs=PipelineTabsConfig(
                 imsgx="iMsgX",
                 downloads="downloads",
@@ -480,19 +601,16 @@ def test_run_processor_once_records_skipped_output_source_without_artifact() -> 
     assert result.record.metadata == {"source": candidate.source}
 
 
-def test_run_processor_once_discards_created_artifact_when_record_append_fails(tmp_path: Path) -> None:
+def test_run_processor_once_discards_created_artifact_when_record_staging_fails(tmp_path: Path) -> None:
     candidate = make_candidate()
-    store = FailingConvertedAppendStore({PipelineStage.TEXTIFY.value: [candidate]})
+    store = FailingConvertedStageStore({PipelineStage.TEXTIFY.value: [candidate]})
     artifacts = LocalArtifactStore(tmp_path)
     processor = StageProcessor()
 
-    result = run_processor_once(processor, store=store, artifacts=artifacts)
+    with pytest.raises(RuntimeError, match="record stage exploded"):
+        run_processor_once(processor, store=store, artifacts=artifacts)
 
-    assert result.status == ProcessorRunStatus.FAILED
-    assert result.record is not None
-    assert result.record.status == TextifyProcessStatus.FAILED.value
-    assert result.record.object_ is None
-    assert result.record.metadata["error"] == "record append exploded"
+    assert store.records == ()
     artifact_dir = tmp_path / "textifications"
     assert not artifact_dir.exists() or not any(artifact_dir.glob("*.json"))
 
@@ -513,7 +631,7 @@ def test_run_processor_once_noops_when_terminal_record_already_exists() -> None:
 
     assert result.status == ProcessorRunStatus.ALREADY_HANDLED
     assert result.existing_record == existing_record
-    assert store.appended == []
+    assert store.staged == []
 
 
 def test_run_processor_once_returns_no_candidate() -> None:
@@ -550,6 +668,54 @@ def test_run_stage_records_failure_and_continues_to_unrelated_source() -> None:
     assert result.made_progress is True
 
 
+def test_run_stage_flushes_records_once_at_end() -> None:
+    first = make_candidate("x://post/1", 1)
+    second = make_candidate("x://post/2", 2)
+
+    class TrackingFlushStore(InMemoryPipelineStore):
+        def __init__(self) -> None:
+            super().__init__({PipelineStage.TEXTIFY.value: [first, second]})
+            self.flush_calls = 0
+
+        def flush_records(self) -> None:
+            self.flush_calls += 1
+            super().flush_records()
+
+    store = TrackingFlushStore()
+
+    result = run_stage(StageProcessor(), store=store, artifacts=InMemoryArtifactStore(), limit=2)
+
+    assert result.iterations == 2
+    assert store.flush_calls == 1
+    assert [record.source_ref.row_number for record in store.records] == [1, 2]
+
+
+def test_run_stage_discards_artifacts_and_staged_records_when_flush_fails(tmp_path: Path) -> None:
+    candidate = make_candidate()
+    store = FailingFlushStore({PipelineStage.TEXTIFY.value: [candidate]})
+    artifacts = LocalArtifactStore(tmp_path)
+
+    with pytest.raises(RuntimeError, match="record flush exploded"):
+        run_stage(StageProcessor(), store=store, artifacts=artifacts, limit=1)
+
+    assert store.records == ()
+    artifact_dir = tmp_path / "textifications"
+    assert not artifact_dir.exists() or not any(artifact_dir.glob("*.json"))
+
+
+def test_run_artifact_through_discards_artifacts_and_staged_records_when_flush_fails(tmp_path: Path) -> None:
+    candidate = make_candidate()
+    store = FailingFlushStore({PipelineStage.TEXTIFY.value: [candidate]})
+    artifacts = LocalArtifactStore(tmp_path)
+
+    with pytest.raises(RuntimeError, match="record flush exploded"):
+        run_artifact_through([StageProcessor()], store=store, artifacts=artifacts, limit=1)
+
+    assert store.records == ()
+    artifact_dir = tmp_path / "textifications"
+    assert not artifact_dir.exists() or not any(artifact_dir.glob("*.json"))
+
+
 def test_run_stage_records_first_unhandled_candidates_in_input_order_up_to_limit() -> None:
     first = make_candidate("x://post/1", 1)
     second = make_candidate("x://post/2", 2)
@@ -564,7 +730,8 @@ def test_run_stage_records_first_unhandled_candidates_in_input_order_up_to_limit
         status=TextifyProcessStatus.CONVERTED.value,
     )
     store = InMemoryPipelineStore({PipelineStage.TEXTIFY.value: [first, second, third, fourth]})
-    store.append_record(existing_record)
+    store.stage_record(existing_record)
+    store.flush_records()
 
     result = run_stage(StageProcessor(), store=store, artifacts=InMemoryArtifactStore(), limit=2)
 

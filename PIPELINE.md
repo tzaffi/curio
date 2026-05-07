@@ -140,11 +140,12 @@ should call an existing service boundary such as `TextifyService` or
 `TranslationService`.
 
 `persist()` should write full artifacts before a compact ledger row is appended.
-It should create a Drive object only when `outcome.object_` is present.
+It should create local and, when configured, Drive objects only when
+`outcome.object_` is present.
 
 `record()` should append exactly one compact row for a newly handled candidate.
-The visible row `Object` cell comes from `PersistedOutcome.object_`; it is blank
-when `object_ is None`.
+The visible row `Object` and `Local` cells come from
+`PersistedOutcome.object_`; both are blank when `object_ is None`.
 
 `stage` is the workflow and CLI identity, such as `textify`, `translate`,
 `dossier`, or `evaluate`. `ledger_tab` is the processor-owned sheet tab and
@@ -258,11 +259,11 @@ Recommended fields:
 - `source_ref`
 - `iMsgX`
 
-Exactly one of `url` or `path` may be enough in some stores, but the model
-should support both because local-first and Drive-backed runs both matter.
-Persisted artifact contents should carry the same lineage refs; `ArtifactRef`
-may mirror them so callers do not need to fetch a large artifact only to answer
-"what row created this?"
+Persisted processor artifact refs should carry both `url` and `path`: `url`
+points at the Google Drive object, and `path` points at the matching local JSON
+artifact. Persisted artifact contents should carry the same lineage refs;
+`ArtifactRef` may mirror them so callers do not need to fetch a large artifact
+only to answer "what row created this?"
 
 ### `ProcessCandidate`
 
@@ -312,10 +313,10 @@ class ProcessOutcome:
 ```
 
 `status` is the Python form of visible sheet `Status`. `object_` is the Python
-field for visible sheet `Object`; when it is `None`, the visible `Object` cell
-will be blank. `output_source` is the source ref emitted for downstream
-processors. `metadata` is JSON/debug detail and is never rendered as a visible
-sheet column.
+field used to render visible sheet `Object` and `Local`; when it is `None`, both
+visible cells will be blank. `output_source` is the source ref emitted for
+downstream processors. `metadata` is JSON/debug detail and is never rendered as
+a visible sheet column.
 
 ### `PersistedOutcome`
 
@@ -399,18 +400,18 @@ artifact link.
 
 Visible row detail belongs in [SCHEMA.md](SCHEMA.md). The intended v1 shape is:
 
-- `textifications`: `Date`, `X Date`, `iMsgX`, `Type`, `Source`, `Status`, `Object`
-- `translations`: `Date`, `X Date`, `iMsgX`, `Type`, `Source`, `Status`, `Object`
+- `textifications`: `Date`, `X Date`, `iMsgX`, `Type`, `Source`, `Status`, `Object`, `Local`
+- `translations`: `Date`, `X Date`, `iMsgX`, `Type`, `Source`, `Status`, `Object`, `Local`
 - `dossiers`: `Date`, `X Date`, `iMsgX`, `Status`, `Object`
 
 Use one specific `Status` column. Do not add visible `Reason`, `Warnings`,
 processor, model, cost, row-number, or version columns to these preparation
 tabs.
 
-`Object` links to the artifact created by that processor in its own folder. For
-the local artifact store this is a local path; for the Google Drive artifact
-store this is a Drive URL. It is blank when the processor did not create an
-object.
+`Object` links to the Drive artifact created by that processor in its own
+folder. `Local` records the local filesystem path for object-creating
+`textify` and `translate` rows. Local-only runs leave `Object` blank. Both are
+blank when the processor did not create an object.
 
 Detailed lineage, contributing rows, processor/model/cost metadata, warnings,
 hashes, and full text belong in the created JSON object.
@@ -661,6 +662,10 @@ Google Sheets workbook used as the operational ledger:
   "pipeline": {
     "downloads_dir": "~/Desktop/iMsgX/downloads",
     "artifact_root": null,
+    "drive_folders": {
+      "textifications": "replace-with-textifications-drive-folder-id",
+      "translations": "replace-with-translations-drive-folder-id"
+    },
     "spreadsheet_id": "replace-with-google-sheets-id",
     "tabs": {
       "imsgx": "iMsgX",
@@ -675,8 +680,9 @@ Google Sheets workbook used as the operational ledger:
 `downloads_dir` and `spreadsheet_id` are required. `artifact_root` is optional.
 When `artifact_root` is omitted or null, the effective artifact root is
 `downloads_dir.parent`, so Curio writes sibling directories beside iMsgX
-`downloads`. `~` expands through the host environment, and relative paths
-resolve relative to the config file directory.
+`downloads`. `drive_folders` must name pre-existing `textifications` and
+`translations` Google Drive folder IDs. `~` expands through the host
+environment, and relative paths resolve relative to the config file directory.
 
 ## Google Sheets Store Implementation
 
@@ -723,10 +729,10 @@ folder:
 - textify response JSON
 - translation response JSON
 
-Persist the JSON object before appending the processor row. The row's `Object`
-cell links to that object, either by local path or Drive URL depending on the
-artifact store. Skipped and failed preparation rows do not create or link
-artifact objects.
+Persist the JSON object before appending the processor row. The row's `Local`
+cell records the local JSON path. When the Drive artifact store is selected,
+the same JSON file is uploaded and the row's `Object` cell records the Drive
+URL. Skipped and failed preparation rows do not create or link artifact objects.
 
 Every persisted artifact should include a small lineage envelope
 with `source_ref`, `iMsgX`, `source`, processor `stage`, `ledger_tab`, and

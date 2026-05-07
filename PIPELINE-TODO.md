@@ -337,8 +337,8 @@ created JSON object.
 
 Recommended visible columns:
 
-- `textifications`: `Date`, `X Date`, `iMsgX`, `Type`, `Source`, `Status`, `Object`
-- `translations`: `Date`, `X Date`, `iMsgX`, `Type`, `Source`, `Status`, `Object`
+- `textifications`: `Date`, `X Date`, `iMsgX`, `Type`, `Source`, `Status`, `Object`, `Local`
+- `translations`: `Date`, `X Date`, `iMsgX`, `Type`, `Source`, `Status`, `Object`, `Local`
 - `dossiers`: `Date`, `X Date`, `iMsgX`, `Status`, `Object`
 
 Use specific status values and no `Reason` column:
@@ -347,8 +347,9 @@ Use specific status values and no `Reason` column:
 - `translations`: `translated`, `already_english`, `failed`
 - `dossiers`: `assembled`, `no_evidence`, `failed`
 
-`Object` is populated only when the processor creates a JSON object in the
-processor's matching Google Drive folder.
+`Local` is populated only when the processor creates a local JSON object.
+`Object` is populated only when the processor uploads that JSON object to the
+processor's matching Google Drive folder. Local-only runs leave `Object` blank.
 
 Failed rows should be allowed in processor tabs, but must be compact and must
 not contain stack traces, secrets, raw model prompts, or large payloads. Full
@@ -427,8 +428,8 @@ Implementation scope until explicitly widened:
 
 - Build only `textify` and `translate` pipeline infrastructure.
 - Keep `download` as upstream input, not a Curio processor.
-- Do not implement `dossier`, `evaluate`, `catalog`, Google Drive artifact
-  adapters, or live pipeline smoke tests during this pass.
+- Do not implement `dossier`, `evaluate`, `catalog`, or live pipeline smoke
+  tests during this pass.
 - Implement the real pipeline store against configured Google Sheets. Do not
   make real CLI commands silently substitute local files or fake stores.
 - Keep this file named `PIPELINE-TODO.md` and tracked by git. Do not move it
@@ -445,11 +446,12 @@ Current implementation state:
 - The `curio pipeline` command group exposes the intended operator controls.
   Targeted previews execute against the configured Google Sheets store, and
   append-capable `run-stage` execution exists for `textify` and `translate`.
-  Full-pipeline append execution is still reserved pending Checkpoint 6D.
+  Full-pipeline append execution is still reserved pending Checkpoint 6E.
 - Candidate selection from configured Google Sheets `iMsgX` / `downloads` data
   is implemented for `textify` and `translate`.
 - Non-persisting targeted preview output is implemented.
-- CLI-level integration tests are still missing meaningful execution coverage.
+- CLI-level integration tests cover preview and append-capable `run-stage`
+  execution without touching live Google services.
 
 [lock] [x] **Checkpoint 2: Pure pipeline contracts**
 
@@ -689,27 +691,58 @@ Current implementation state:
   live Google Sheets, Google Drive, or live providers.
 - [test] Gate: `make check`, 100% coverage passed.
 
-[lock] [ ] **Checkpoint 6D: Google Drive artifact store**
+[lock] [x] **Checkpoint 6D: Google Drive artifact store**
 
+- Update processor sheet handling for the new `Local`/`Object` split.
+  - Parse `textifications` and `translations` rows by header name, not fixed
+    column position, so live column ordering is not operationally significant.
+  - Initialize empty processor tabs with `Object` before `Local`.
+  - Preserve existing live header ordering when appending rows.
+  - Write local filesystem paths to `Local`; write Drive URLs to `Object`.
+  - Treat legacy `Object` local paths as a migration fallback only when no
+    `Local` column exists.
+- Require explicit Drive folder IDs in `pipeline.drive_folders`.
+  - Persisted runs always use local deterministic artifacts plus Google Drive
+    upload/reuse.
+  - Validate local artifact directories and both configured Drive folders before
+    provider processing.
+  - Match current iMsgX behavior: local artifact directories may be created by
+    the program, but Drive folders are pre-existing configured folders, not
+    auto-created by the normal pipeline path.
+- Create the two Google Drive folders as siblings of the existing `downloads`
+  folder outside the pipeline path, then record their folder IDs in config.
+  Suggested folder names are `textifications` and `translations`.
+- Reuse Curio's direct Google REST/OAuth/keychain implementation style.
+  Request the same pragmatic Drive scope used by iMsgX for manually configured
+  Drive folders: `https://www.googleapis.com/auth/drive`.
 - Add a Google Drive-backed `ArtifactStore` for object-creating `textify` and
   `translate` outcomes.
-- Keep `LocalArtifactStore` available for offline tests and local-only runs, but
-  make Drive-backed artifacts the shared-machine option.
-- Extend config with explicit artifact store selection and Drive folder
-  identity for `textifications` and `translations`.
-- Reuse Curio's direct Google REST/OAuth/keychain implementation style.
-- Request the minimum Drive OAuth scope needed to create and update Curio-owned
-  artifact files.
-- Upload deterministic JSON envelopes with the same iMsgX-style filenames used
-  by the local store.
-- Write Drive URLs, not local paths, to processor sheet `Object` cells when the
-  Drive store is selected.
+  - Persist the deterministic JSON envelope locally first, using the same
+    iMsgX-style filename and local sibling directories as the local store.
+  - Upload that same local JSON file into the processor's configured Drive
+    folder.
+  - Return an `ArtifactRef` containing both `path` and `url`, so `Local` and
+    `Object` can both be populated.
+  - Include stage, ledger tab, processor version, source refs, root `iMsgX`,
+    and content hash in the envelope and/or Drive app properties.
+- Implement Drive idempotency and collision behavior.
+  - Search the configured processor folder for the deterministic filename.
+  - Reuse an existing Drive file when the stored content hash matches.
+  - Reject an existing same-name Drive file when the content hash differs or is
+    missing/ambiguous.
+  - Do not overwrite or update previously uploaded artifacts in this checkpoint.
 - Preserve the no-sentinel rule: skipped/no-op and failed outcomes do not
-  create Drive files.
-- Delete files created during the current attempt if the processor sheet append
-  fails after Drive upload.
-- [test] Fake HTTP tests cover upload, idempotent same-content reuse, changed
-  content rejection, and rollback without touching live Google Drive.
+  create local files or Drive files.
+- Keep downstream `translate` reading textification content from `Local`
+  whenever present; `Object` is the shareable Drive URL, not the local file to
+  parse.
+- Delete local and Drive files created during the current attempt if the
+  processor sheet append fails after artifact persistence.
+- Update `PIPELINE.md`, `SCHEMA.md`, `USAGE.md`, and config examples to document
+  `Local` vs `Object`, Drive folder IDs, and the selected artifact store.
+- [test] Fake HTTP tests cover folder-scoped search, upload, same-content reuse,
+  changed-content rejection, missing folder config, local/Drive rollback, and
+  header-order-insensitive Sheets parsing without touching live Google Drive.
 - [test] Gate: `make check`, 100% coverage passed.
 
 [lock] [ ] **Checkpoint 6E: Executable full `run`**

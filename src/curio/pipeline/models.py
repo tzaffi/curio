@@ -470,12 +470,25 @@ class PipelineStore(Protocol):
         candidate: ProcessCandidate,
     ) -> ProcessRecord | None: ...
 
-    def append_record(self, record: ProcessRecord) -> ProcessRecord: ...
+    def stage_record(self, record: ProcessRecord) -> ProcessRecord: ...
+
+    def flush_records(self) -> None: ...
+
+    def discard_staged_records(self) -> None: ...
 
     def resolve_ref(self, ref: ProcessRef) -> ProcessRef: ...
 
 
 class ArtifactStore(Protocol):
+    def existing_object(
+        self,
+        *,
+        stage: str,
+        ledger_tab: str,
+        version: str,
+        candidate: ProcessCandidate,
+    ) -> ArtifactRef | None: ...
+
     def persist_object(
         self,
         *,

@@ -25,6 +25,29 @@ class LocalArtifactStore:
     def from_config(cls, config: PipelineConfig) -> Self:
         return cls(config.effective_artifact_root)
 
+    def existing_object(
+        self,
+        *,
+        stage: str,
+        ledger_tab: str,
+        version: str,
+        candidate: ProcessCandidate,
+    ) -> ArtifactRef | None:
+        del version
+        path = self.root / ledger_tab / artifact_filename(stage, candidate)
+        if not path.exists():
+            return None
+        content = path.read_bytes()
+        return ArtifactRef(
+            kind=f"{stage}_object",
+            mime_type="application/json",
+            path=str(path),
+            sha256=hashlib.sha256(content).hexdigest(),
+            size_bytes=len(content),
+            source_ref=candidate.source_ref,
+            imsgx=candidate.imsgx,
+        )
+
     def persist_object(
         self,
         *,
@@ -34,30 +57,21 @@ class LocalArtifactStore:
         candidate: ProcessCandidate,
         object_: ProcessorObject,
     ) -> ArtifactRef:
-        envelope: JsonObject = {
-            "stage": stage,
-            "ledger_tab": ledger_tab,
-            "version": version,
-            "source_ref": candidate.source_ref.to_json(),
-            "iMsgX": candidate.imsgx.to_json(),
-            "source": candidate.source,
-            "artifact_key": candidate.artifact_key,
-            "metadata": dict(candidate.metadata),
-            "object": dict(object_.payload),
-        }
+        envelope = artifact_envelope(stage=stage, ledger_tab=ledger_tab, version=version, candidate=candidate, object_=object_)
         content = _json_bytes(envelope)
-        digest = hashlib.sha256(content).hexdigest()
         directory = self.root / ledger_tab
         directory.mkdir(parents=True, exist_ok=True)
-        path = directory / _artifact_filename(stage, candidate)
-        if _write_new_or_matching_content(path, content):
+        path = directory / artifact_filename(stage, candidate)
+        persisted_content, created = _write_new_or_existing_content(path, content)
+        if created:
             self._created_paths.add(path)
+        digest = hashlib.sha256(persisted_content).hexdigest()
         return ArtifactRef(
             kind=f"{stage}_object",
             mime_type=object_.mime_type,
             path=str(path),
             sha256=digest,
-            size_bytes=len(content),
+            size_bytes=len(persisted_content),
             source_ref=candidate.source_ref,
             imsgx=candidate.imsgx,
         )
@@ -72,7 +86,28 @@ class LocalArtifactStore:
         self._created_paths.remove(path)
 
 
-def _artifact_filename(stage: str, candidate: ProcessCandidate) -> str:
+def artifact_envelope(
+    *,
+    stage: str,
+    ledger_tab: str,
+    version: str,
+    candidate: ProcessCandidate,
+    object_: ProcessorObject,
+) -> JsonObject:
+    return {
+        "stage": stage,
+        "ledger_tab": ledger_tab,
+        "version": version,
+        "source_ref": candidate.source_ref.to_json(),
+        "iMsgX": candidate.imsgx.to_json(),
+        "source": candidate.source,
+        "artifact_key": candidate.artifact_key,
+        "metadata": dict(candidate.metadata),
+        "object": dict(object_.payload),
+    }
+
+
+def artifact_filename(stage: str, candidate: ProcessCandidate) -> str:
     stem = _source_artifact_stem(candidate)
     if stem is not None:
         match = IMSGX_STEM_RE.match(stem)
@@ -98,10 +133,8 @@ def _slugify(value: str) -> str:
     return slug[:80].strip("-") if slug else "source"
 
 
-def _write_new_or_matching_content(path: Path, content: bytes) -> bool:
+def _write_new_or_existing_content(path: Path, content: bytes) -> tuple[bytes, bool]:
     if path.exists():
-        if path.read_bytes() != content:
-            raise FileExistsError(f"local artifact already exists with different content: {path}")
-        return False
+        return path.read_bytes(), False
     path.write_bytes(content)
-    return True
+    return content, True

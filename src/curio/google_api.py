@@ -1,5 +1,5 @@
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Protocol, cast
 
 import keyring
@@ -15,6 +15,8 @@ from oauthlib.oauth2.rfc6749.errors import AccessDeniedError
 from curio.config import GoogleConfig
 
 GOOGLE_SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
+GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
+GOOGLE_PIPELINE_SCOPES = (GOOGLE_SHEETS_SCOPE, GOOGLE_DRIVE_SCOPE)
 GOOGLE_OAUTH_LOCAL_SERVER_TIMEOUT_SECONDS = 120
 
 StoredGoogleCredentials = AuthorizedUserCredentials | ExternalAccountAuthorizedUserCredentials
@@ -36,7 +38,9 @@ class GoogleSession(Protocol):
         url: str,
         *,
         params: Mapping[str, str],
-        json: Mapping[str, object],
+        json: Mapping[str, object] | None = None,
+        data: bytes | None = None,
+        headers: Mapping[str, str] | None = None,
     ) -> GoogleResponse: ...
 
     def put(
@@ -46,6 +50,8 @@ class GoogleSession(Protocol):
         params: Mapping[str, str],
         json: Mapping[str, object],
     ) -> GoogleResponse: ...
+
+    def delete(self, url: str, *, params: Mapping[str, str]) -> GoogleResponse: ...
 
 
 class GoogleApiError(RuntimeError):
@@ -63,11 +69,12 @@ def load_credentials(config: GoogleConfig, *, scopes: Sequence[str]) -> StoredGo
             f"Missing Google OAuth client credential file at {config.oauth_client_credentials_path}"
         )
 
-    normalized_scopes = tuple(dict.fromkeys(scopes))
+    normalized_scopes = normalize_scopes(scopes)
     credentials_json = read_authorized_user_credentials_json(config)
+    existing_scopes = stored_scopes(credentials_json) if credentials_json is not None else ()
     credentials = (
-        credentials_from_json(credentials_json, scopes=normalized_scopes)
-        if credentials_json is not None and stored_scopes_cover(credentials_json, normalized_scopes)
+        credentials_from_json(credentials_json, scopes=existing_scopes)
+        if credentials_json is not None and set(normalized_scopes).issubset(existing_scopes)
         else None
     )
 
@@ -81,7 +88,7 @@ def load_credentials(config: GoogleConfig, *, scopes: Sequence[str]) -> StoredGo
 
     flow = InstalledAppFlow.from_client_secrets_file(
         str(config.oauth_client_credentials_path),
-        scopes=list(normalized_scopes),
+        scopes=list(merge_scopes(normalized_scopes, existing_scopes)),
     )
     try:
         credentials = flow.run_local_server(
@@ -132,24 +139,37 @@ def read_authorized_user_credentials_json(config: GoogleConfig) -> str | None:
 
 
 def stored_scopes_cover(payload: str, scopes: Sequence[str]) -> bool:
+    stored_scope_values = stored_scopes(payload)
+    if not stored_scope_values:
+        return False
+    return set(scopes).issubset(stored_scope_values)
+
+
+def stored_scopes(payload: str) -> tuple[str, ...]:
     try:
         data = json.loads(payload)
     except json.JSONDecodeError:
-        return False
+        return ()
     if not isinstance(data, dict):
-        return False
+        return ()
 
     stored = data.get("scopes")
     if isinstance(stored, list):
-        stored_scopes = {value for value in stored if isinstance(value, str)}
+        return normalize_scopes(value for value in stored if isinstance(value, str))
     elif isinstance(data.get("scope"), str):
-        stored_scopes = set(str(data["scope"]).split())
-    else:
-        stored_scopes = set()
+        return normalize_scopes(str(data["scope"]).split())
+    return ()
 
-    if not stored_scopes:
-        return False
-    return set(scopes).issubset(stored_scopes)
+
+def normalize_scopes(scopes: Iterable[str]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(scopes))
+
+
+def merge_scopes(*scope_groups: Sequence[str]) -> tuple[str, ...]:
+    merged: list[str] = []
+    for scope_group in scope_groups:
+        merged.extend(scope_group)
+    return normalize_scopes(merged)
 
 
 def google_oauth_access_denied_message(scopes: Sequence[str]) -> str:

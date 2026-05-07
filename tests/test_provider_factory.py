@@ -9,6 +9,7 @@ from curio.config import (
     KeychainLocator,
     LlmCallerConfig,
     PipelineConfig,
+    PipelineDriveFoldersConfig,
     PipelineTabsConfig,
 )
 from curio.llm_caller import (
@@ -84,6 +85,10 @@ def make_pipeline_config(downloads_dir: Path) -> PipelineConfig:
     return PipelineConfig(
         downloads_dir=downloads_dir,
         spreadsheet_id="spreadsheet-id",
+        drive_folders=PipelineDriveFoldersConfig(
+            textifications="folder-textifications",
+            translations="folder-translations",
+        ),
         tabs=PipelineTabsConfig(
             imsgx="iMsgX",
             downloads="downloads",

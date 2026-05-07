@@ -1,10 +1,11 @@
+from curio.google_api import GOOGLE_DRIVE_SCOPE
+from curio.pipeline.drive import DriveFile, GoogleDriveArtifactStore, GoogleDriveClient
 from curio.pipeline.google_sheets import (
     GoogleSheetsClient,
     GoogleSheetsPipelineStore,
     GoogleSheetsPipelineStoreError,
     PipelineSelector,
 )
-from curio.pipeline.local import LocalArtifactStore
 from curio.pipeline.memory import InMemoryArtifactStore, InMemoryPipelineStore
 from curio.pipeline.models import (
     ArtifactRef,
@@ -63,7 +64,10 @@ __all__ = [
     "GoogleSheetsClient",
     "GoogleSheetsPipelineStore",
     "GoogleSheetsPipelineStoreError",
-    "LocalArtifactStore",
+    "GoogleDriveArtifactStore",
+    "GoogleDriveClient",
+    "DriveFile",
+    "GOOGLE_DRIVE_SCOPE",
     "PipelineSelector",
     "PipelineRunResult",
     "PipelineProgressCallback",

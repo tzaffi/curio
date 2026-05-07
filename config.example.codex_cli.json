@@ -8,6 +8,10 @@
   "pipeline": {
     "downloads_dir": "~/Desktop/iMsgX/downloads",
     "artifact_root": null,
+    "drive_folders": {
+      "textifications": "replace-with-textifications-drive-folder-id",
+      "translations": "replace-with-translations-drive-folder-id"
+    },
     "spreadsheet_id": "replace-with-google-sheets-id",
     "tabs": {
       "imsgx": "iMsgX",

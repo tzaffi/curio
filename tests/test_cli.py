@@ -11,6 +11,7 @@ from curio.cli import app
 from curio.config import (
     LlmCallerPromptConfig,
     PipelineConfig,
+    PipelineDriveFoldersConfig,
     PipelineTabsConfig,
     TextifyConfig,
     TranslateConfig,
@@ -38,6 +39,7 @@ from curio.pipeline import (
     TextifyProcessStatus,
     TranslateProcessStatus,
 )
+from curio.pipeline.local import LocalArtifactStore
 from curio.textify import (
     SuggestedTextFile,
     TextifiedSource,
@@ -72,6 +74,10 @@ class FakeCurioConfig:
         self.pipeline_config = pipeline_config or PipelineConfig(
             downloads_dir=Path("/tmp/curio-test-downloads"),
             spreadsheet_id="spreadsheet-id",
+            drive_folders=PipelineDriveFoldersConfig(
+                textifications="folder-textifications",
+                translations="folder-translations",
+            ),
             tabs=PipelineTabsConfig(
                 imsgx="iMsgX",
                 downloads="downloads",
@@ -104,10 +110,9 @@ class FakePipelinePreviewStore:
         return tuple(self.items_by_stage.get(stage, [])[:limit])
 
 
-class FailingAppendPipelineStore(InMemoryPipelineStore):
-    def append_record(self, record: ProcessRecord) -> ProcessRecord:
-        del record
-        raise cli.GoogleSheetsPipelineStoreError("append failed")
+class FailingFlushPipelineStore(InMemoryPipelineStore):
+    def flush_records(self) -> None:
+        raise cli.GoogleApiError("Unable to append Google Sheet rows: HTTP 429 Too Many Requests")
 
 
 def make_preview_item(stage: str = "textify") -> PipelinePreviewItem:
@@ -127,6 +132,10 @@ def make_runtime_pipeline_config(tmp_path: Path) -> PipelineConfig:
         downloads_dir=tmp_path / "downloads",
         artifact_root=tmp_path / "artifacts",
         spreadsheet_id="spreadsheet-id",
+        drive_folders=PipelineDriveFoldersConfig(
+            textifications="folder-textifications",
+            translations="folder-translations",
+        ),
         tabs=PipelineTabsConfig(
             imsgx="iMsgX",
             downloads="downloads",
@@ -157,6 +166,11 @@ def install_fake_pipeline_runtime_store(
         return store
 
     monkeypatch.setattr(cli.GoogleSheetsPipelineStore, "from_config", staticmethod(fake_from_config))
+    monkeypatch.setattr(
+        cli.GoogleDriveArtifactStore,
+        "from_config",
+        staticmethod(lambda **_kwargs: LocalArtifactStore.from_config(config.pipeline_config)),
+    )
 
 
 def make_textify_process_candidate(tmp_path: Path) -> ProcessCandidate:
@@ -560,6 +574,68 @@ def test_pipeline_run_stage_textify_persist_executes_processor(
     assert Path(store.records[0].object_.path).parent == tmp_path / "artifacts" / "textifications"
 
 
+def test_pipeline_run_stage_always_uses_drive_artifact_store(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = make_runtime_config(tmp_path)
+    candidate = make_textify_process_candidate(tmp_path)
+    store = InMemoryPipelineStore({PipelineStage.TEXTIFY.value: [candidate]})
+    selectors: list[PipelineSelector] = []
+    drive_store_calls: list[dict[str, object]] = []
+    install_fake_pipeline_runtime_store(monkeypatch, config, store, selectors)
+    monkeypatch.setattr(
+        cli,
+        "_build_textify_service",
+        lambda _llm_caller, _config_path, config=None, **_kwargs: FakeTextifyService(),
+    )
+
+    def fake_drive_store_from_config(**kwargs: object) -> object:
+        drive_store_calls.append(dict(kwargs))
+        return LocalArtifactStore.from_config(config.pipeline_config)
+
+    monkeypatch.setattr(cli.GoogleDriveArtifactStore, "from_config", staticmethod(fake_drive_store_from_config))
+
+    result = runner.invoke(app, ["pipeline", "run-stage", "textify", "--limit", "1", "--persist"])
+
+    assert result.exit_code == 0
+    assert selectors == [PipelineSelector()]
+    assert drive_store_calls == [
+        {
+            "google_config": "google-config",
+            "pipeline_config": config.pipeline_config,
+        }
+    ]
+    assert store.records[0].object_ is not None
+
+
+def test_pipeline_run_stage_reports_drive_artifact_store_auth_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = make_runtime_config(tmp_path)
+    candidate = make_textify_process_candidate(tmp_path)
+    store = InMemoryPipelineStore({PipelineStage.TEXTIFY.value: [candidate]})
+    selectors: list[PipelineSelector] = []
+    install_fake_pipeline_runtime_store(monkeypatch, config, store, selectors)
+    monkeypatch.setattr(
+        cli,
+        "_build_textify_service",
+        lambda _llm_caller, _config_path, config=None, **_kwargs: FakeTextifyService(),
+    )
+    monkeypatch.setattr(
+        cli.GoogleDriveArtifactStore,
+        "from_config",
+        staticmethod(lambda **_kwargs: (_ for _ in ()).throw(cli.GoogleApiError("drive auth failed"))),
+    )
+
+    result = runner.invoke(app, ["pipeline", "run-stage", "textify", "--limit", "1", "--persist"])
+
+    assert result.exit_code == 1
+    assert "drive auth failed" in result.output
+    assert selectors == [PipelineSelector()]
+
+
 def test_pipeline_run_stage_textify_persist_records_unsupported_video_without_service_call(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -749,7 +825,7 @@ def test_pipeline_run_stage_persist_reports_processor_build_and_runtime_errors(
     install_fake_pipeline_runtime_store(
         monkeypatch,
         config,
-        FailingAppendPipelineStore({PipelineStage.TEXTIFY.value: [candidate]}),
+        FailingFlushPipelineStore({PipelineStage.TEXTIFY.value: [candidate]}),
         selectors,
     )
     monkeypatch.setattr(
@@ -769,7 +845,7 @@ def test_pipeline_run_stage_persist_reports_processor_build_and_runtime_errors(
     runtime_result = runner.invoke(app, ["pipeline", "run-stage", "textify", "--persist"])
 
     assert runtime_result.exit_code == 1
-    assert "append failed" in runtime_result.output
+    assert "HTTP 429 Too Many Requests" in runtime_result.output
     assert selectors == [PipelineSelector()]
 
 

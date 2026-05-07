@@ -26,6 +26,7 @@ class InMemoryPipelineStore:
             stage: list(candidates) for stage, candidates in (candidates_by_stage or {}).items()
         }
         self._records: list[ProcessRecord] = []
+        self._staged_records: list[ProcessRecord] = []
 
     @property
     def records(self) -> tuple[ProcessRecord, ...]:
@@ -60,9 +61,18 @@ class InMemoryPipelineStore:
                 return record
         return None
 
-    def append_record(self, record: ProcessRecord) -> ProcessRecord:
+    def stage_record(self, record: ProcessRecord) -> ProcessRecord:
         self._records.append(record)
+        self._staged_records.append(record)
         return record
+
+    def flush_records(self) -> None:
+        self._staged_records.clear()
+
+    def discard_staged_records(self) -> None:
+        for record in self._staged_records:
+            self._records.remove(record)
+        self._staged_records.clear()
 
     def resolve_ref(self, ref: ProcessRef) -> ProcessRef:
         return ref
@@ -79,6 +89,17 @@ class InMemoryArtifactStore:
     @property
     def objects(self) -> Mapping[str, JsonObject]:
         return dict(self._objects)
+
+    def existing_object(
+        self,
+        *,
+        stage: str,
+        ledger_tab: str,
+        version: str,
+        candidate: ProcessCandidate,
+    ) -> ArtifactRef | None:
+        del stage, ledger_tab, version, candidate
+        return None
 
     def persist_object(
         self,

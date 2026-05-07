@@ -8,7 +8,6 @@ from curio.llm_caller import LlmUsage
 from curio.pipeline import (
     InMemoryArtifactStore,
     InMemoryPipelineStore,
-    LocalArtifactStore,
     PipelineStage,
     ProcessCandidate,
     ProcessRef,
@@ -18,6 +17,7 @@ from curio.pipeline import (
     TranslateProcessStatus,
     run_processor_once,
 )
+from curio.pipeline.local import LocalArtifactStore
 from curio.textify import (
     SuggestedTextFile,
     TextifiedSource,

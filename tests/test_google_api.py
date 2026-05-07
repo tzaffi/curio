@@ -1,4 +1,5 @@
 import json
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,8 @@ from oauthlib.oauth2.rfc6749.errors import AccessDeniedError
 
 from curio.config import GoogleConfig, KeychainLocator
 from curio.google_api import (
+    GOOGLE_DRIVE_SCOPE,
+    GOOGLE_PIPELINE_SCOPES,
     GOOGLE_SHEETS_SCOPE,
     GoogleApiError,
     build_authorized_session,
@@ -17,6 +20,7 @@ from curio.google_api import (
     load_credentials,
     read_authorized_user_credentials_json,
     store_credentials,
+    stored_scopes,
     stored_scopes_cover,
 )
 
@@ -84,7 +88,10 @@ def test_credentials_from_json_and_scope_validation() -> None:
     credentials = credentials_from_json(payload, scopes=[GOOGLE_SHEETS_SCOPE])
 
     assert credentials.refresh_token == "refresh"
+    assert stored_scopes(payload) == (GOOGLE_SHEETS_SCOPE, "extra")
     assert stored_scopes_cover(payload, [GOOGLE_SHEETS_SCOPE]) is True
+    assert stored_scopes_cover(payload, GOOGLE_PIPELINE_SCOPES) is False
+    assert stored_scopes(json.dumps({"scope": f"{GOOGLE_SHEETS_SCOPE} extra"})) == (GOOGLE_SHEETS_SCOPE, "extra")
     assert stored_scopes_cover(json.dumps({"scope": f"{GOOGLE_SHEETS_SCOPE} extra"}), [GOOGLE_SHEETS_SCOPE]) is True
     assert stored_scopes_cover(json.dumps({"scopes": ["other"]}), [GOOGLE_SHEETS_SCOPE]) is False
     assert stored_scopes_cover(json.dumps({"token": "token"}), [GOOGLE_SHEETS_SCOPE]) is False
@@ -109,8 +116,8 @@ def test_load_credentials_requires_client_secret_file(tmp_path: Path) -> None:
 
 def test_load_credentials_reuses_valid_keychain_credentials(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     credentials = FakeCredentials(valid=True)
-    monkeypatch.setattr("curio.google_api.read_authorized_user_credentials_json", lambda config: "stored")
-    monkeypatch.setattr("curio.google_api.stored_scopes_cover", lambda payload, scopes: True)
+    payload = json.dumps({"token": "stored", "scopes": [GOOGLE_SHEETS_SCOPE]})
+    monkeypatch.setattr("curio.google_api.read_authorized_user_credentials_json", lambda config: payload)
     monkeypatch.setattr("curio.google_api.credentials_from_json", lambda payload, scopes: credentials)
 
     assert load_credentials(google_config(tmp_path), scopes=[GOOGLE_SHEETS_SCOPE]) is credentials
@@ -119,8 +126,8 @@ def test_load_credentials_reuses_valid_keychain_credentials(monkeypatch: pytest.
 def test_load_credentials_refreshes_expired_credentials(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     credentials = FakeCredentials(valid=False, expired=True, refresh_token="refresh")
     stored: list[FakeCredentials] = []
-    monkeypatch.setattr("curio.google_api.read_authorized_user_credentials_json", lambda config: "stored")
-    monkeypatch.setattr("curio.google_api.stored_scopes_cover", lambda payload, scopes: True)
+    payload = json.dumps({"token": "stored", "scopes": [GOOGLE_SHEETS_SCOPE]})
+    monkeypatch.setattr("curio.google_api.read_authorized_user_credentials_json", lambda config: payload)
     monkeypatch.setattr("curio.google_api.credentials_from_json", lambda payload, scopes: credentials)
     monkeypatch.setattr("curio.google_api.store_credentials", lambda config, refreshed: stored.append(refreshed))
 
@@ -156,6 +163,59 @@ def test_load_credentials_runs_oauth_when_missing_or_scope_mismatch(
     assert loaded is oauth_credentials
     assert stored == [oauth_credentials]
     assert seen_scopes == [[GOOGLE_SHEETS_SCOPE]]
+
+
+def test_load_credentials_preserves_existing_scopes_when_oauth_adds_scope(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    oauth_credentials = FakeCredentials(valid=True)
+    stored: list[FakeCredentials] = []
+    seen_scopes: list[list[str]] = []
+    existing_payload = json.dumps({"token": "stored", "scopes": [GOOGLE_DRIVE_SCOPE]})
+
+    class FakeInstalledAppFlow:
+        @staticmethod
+        def from_client_secrets_file(path: str, scopes: list[str]) -> FakeFlow:
+            del path
+            seen_scopes.append(scopes)
+            return FakeFlow(oauth_credentials)
+
+    monkeypatch.setattr("curio.google_api.read_authorized_user_credentials_json", lambda config: existing_payload)
+    monkeypatch.setattr("curio.google_api.InstalledAppFlow", FakeInstalledAppFlow)
+    monkeypatch.setattr("curio.google_api.store_credentials", lambda config, credentials: stored.append(credentials))
+
+    loaded = load_credentials(google_config(tmp_path), scopes=[GOOGLE_SHEETS_SCOPE])
+
+    assert loaded is oauth_credentials
+    assert stored == [oauth_credentials]
+    assert seen_scopes == [[GOOGLE_SHEETS_SCOPE, GOOGLE_DRIVE_SCOPE]]
+
+
+def test_load_credentials_refresh_preserves_stored_union_scopes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    credentials = FakeCredentials(valid=False, expired=True, refresh_token="refresh")
+    stored: list[FakeCredentials] = []
+    seen_scopes: list[tuple[str, ...]] = []
+    existing_payload = json.dumps({"token": "stored", "scopes": list(GOOGLE_PIPELINE_SCOPES)})
+
+    def fake_credentials_from_json(payload: str, *, scopes: Sequence[str]) -> FakeCredentials:
+        del payload
+        seen_scopes.append(tuple(scopes))
+        return credentials
+
+    monkeypatch.setattr("curio.google_api.read_authorized_user_credentials_json", lambda config: existing_payload)
+    monkeypatch.setattr("curio.google_api.credentials_from_json", fake_credentials_from_json)
+    monkeypatch.setattr("curio.google_api.store_credentials", lambda config, refreshed: stored.append(refreshed))
+
+    loaded = load_credentials(google_config(tmp_path), scopes=[GOOGLE_SHEETS_SCOPE])
+
+    assert loaded is credentials
+    assert credentials.refreshed is True
+    assert seen_scopes == [GOOGLE_PIPELINE_SCOPES]
+    assert stored == [credentials]
 
 
 @pytest.mark.parametrize(

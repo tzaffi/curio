@@ -25,10 +25,10 @@ structured JSON request for one run.
 
 Pipeline commands also require explicit `pipeline` config. `downloads_dir`
 anchors local iMsgX artifacts, `artifact_root` controls Curio's local output
-folders when set, and `spreadsheet_id` plus `tabs` identify the Google Sheets
-ledger used by real pipeline runs. The required top-level `google` config holds
-the OAuth desktop-client path and Keychain locator for the Google authorized-user
-token.
+folders when set, `drive_folders` identifies the required Google Drive output
+folders, and `spreadsheet_id` plus `tabs` identify the Google Sheets ledger used
+by real pipeline runs. The required top-level `google` config holds the OAuth
+desktop-client path and Keychain locator for the Google authorized-user token.
 
 Each named caller owns its provider, model, auth config, timeout, and
 provider-specific tuning. Translator callers in the example configs also define
@@ -331,9 +331,9 @@ next-available reprocessing for that input. Clean up the ledger row manually
 for now if you intentionally want to retry it; explicit retry semantics are a
 later pipeline checkpoint.
 
-Current executable pipeline commands use the local artifact store. A
-Google Drive-backed artifact store is tracked as the next pipeline storage
-checkpoint so `Object` cells can hold Drive URLs for cross-machine access.
+Persisted pipeline commands write deterministic JSON artifacts locally, upload
+or reuse the same object in the configured processor Drive folder, record the
+Drive URL in `Object`, and record the local path in `Local`.
 
 This next-available sweep refuses to run because it could append rows without
 the explicit mutation gate:

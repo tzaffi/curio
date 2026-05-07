@@ -121,10 +121,21 @@ class PipelineTabsConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class PipelineDriveFoldersConfig:
+    textifications: str
+    translations: str
+
+    def __post_init__(self) -> None:
+        _require_string(self.textifications, "pipeline.drive_folders.textifications")
+        _require_string(self.translations, "pipeline.drive_folders.translations")
+
+
+@dataclass(frozen=True, slots=True)
 class PipelineConfig:
     downloads_dir: Path
     spreadsheet_id: str
     tabs: PipelineTabsConfig
+    drive_folders: PipelineDriveFoldersConfig
     artifact_root: Path | None = None
 
     def __post_init__(self) -> None:
@@ -133,6 +144,8 @@ class PipelineConfig:
         _require_string(self.spreadsheet_id, "pipeline.spreadsheet_id")
         if not isinstance(self.tabs, PipelineTabsConfig):
             raise ConfigError("config.json must define 'pipeline.tabs' as a PipelineTabsConfig")
+        if not isinstance(self.drive_folders, PipelineDriveFoldersConfig):
+            raise ConfigError("config.json must define 'pipeline.drive_folders' as a PipelineDriveFoldersConfig")
         if self.artifact_root is not None and not isinstance(self.artifact_root, Path):
             raise ConfigError("config.json must define 'pipeline.artifact_root' as a Path or null")
 
@@ -358,6 +371,7 @@ def _parse_pipeline_config(value: object, config_dir: Path) -> PipelineConfig:
         else _resolve_config_path(data.get("artifact_root"), "pipeline.artifact_root", config_dir),
         spreadsheet_id=_require_string(data.get("spreadsheet_id"), "pipeline.spreadsheet_id"),
         tabs=_parse_pipeline_tabs_config(data.get("tabs")),
+        drive_folders=_parse_pipeline_drive_folders_config(data.get("drive_folders")),
     )
 
 
@@ -368,6 +382,20 @@ def _parse_pipeline_tabs_config(value: object) -> PipelineTabsConfig:
         downloads=_require_string(data.get("downloads"), "pipeline.tabs.downloads"),
         textifications=_require_string(data.get("textifications"), "pipeline.tabs.textifications"),
         translations=_require_string(data.get("translations"), "pipeline.tabs.translations"),
+    )
+
+
+def _parse_pipeline_drive_folders_config(value: object) -> PipelineDriveFoldersConfig:
+    data = _require_mapping(value, "pipeline.drive_folders")
+    return PipelineDriveFoldersConfig(
+        textifications=_require_string(
+            data.get("textifications"),
+            "pipeline.drive_folders.textifications",
+        ),
+        translations=_require_string(
+            data.get("translations"),
+            "pipeline.drive_folders.translations",
+        ),
     )
 
 

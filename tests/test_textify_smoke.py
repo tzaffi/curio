@@ -9,6 +9,7 @@ from curio.config import (
     GoogleConfig,
     KeychainLocator,
     PipelineConfig,
+    PipelineDriveFoldersConfig,
     PipelineTabsConfig,
     TranslateConfig,
 )
@@ -55,6 +56,10 @@ def pipeline_config() -> PipelineConfig:
     return PipelineConfig(
         downloads_dir=repo_root() / "downloads",
         spreadsheet_id="spreadsheet-id",
+        drive_folders=PipelineDriveFoldersConfig(
+            textifications="folder-textifications",
+            translations="folder-translations",
+        ),
         tabs=PipelineTabsConfig(
             imsgx="iMsgX",
             downloads="downloads",
@@ -230,11 +235,15 @@ def test_textify_smoke_config_reports_errors(tmp_path: Path) -> None:
     config_path.write_text(
         json.dumps(
             {
-                    "pipeline": {
-                        "downloads_dir": "downloads",
-                        "artifact_root": None,
-                        "spreadsheet_id": "spreadsheet-id",
-                        "tabs": {
+                        "pipeline": {
+                            "downloads_dir": "downloads",
+                            "artifact_root": None,
+                            "drive_folders": {
+                                "textifications": "folder-textifications",
+                                "translations": "folder-translations",
+                            },
+                            "spreadsheet_id": "spreadsheet-id",
+                            "tabs": {
                             "imsgx": "iMsgX",
                             "downloads": "downloads",
                             "textifications": "textifications",

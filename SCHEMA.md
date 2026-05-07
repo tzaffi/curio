@@ -31,7 +31,8 @@ Those belong in [PIPELINE.md](/Users/zeph/github/tzaffi/curio/PIPELINE.md), [JSO
 The v1 schema should follow these rules:
 
 - Google Sheets remains the online operational store in v1.
-- Google Drive or a local artifact store stores full processor artifacts.
+- Google Drive stores full processor artifacts, with matching deterministic
+  local JSON paths recorded for inspection.
 - `downloads` remains the upstream `iMsgX` append-only ingestion ledger.
 - Curio is append-only in v1.
 - `Source` is the stable artifact identity in Sheets v1.
@@ -75,6 +76,7 @@ downloads row is expected to be the operator-facing Google Sheets row URL.
 - Newly handled ineligible work should append a compact row with a specific status such as `already_text`, `already_english`, `unsupported`, `no_text`, or `no_evidence`.
 - Failed attempts may append compact `failed` rows. They must not include stack traces, raw prompts, secrets, or large provider payloads in Sheets.
 - `Object` is populated only when the processor creates a Google Drive object.
+- `Local` is populated only when the processor creates a local JSON artifact.
 - History is never rewritten.
 - The `catalog` tab is derived and may be rebuilt at any time from `downloads` and completed accepted `evaluations` rows.
 
@@ -103,8 +105,9 @@ translations/
 dossiers/
 ```
 
-When a processor creates an object, the row's `Object` cell links to the Google
-Drive object created in that processor's folder.
+When a processor creates an object, the row's `Local` cell records the local
+JSON artifact path and `Object` links to the Google Drive object created in
+that processor's folder.
 
 For v1, each object-creating preparation processor row creates one JSON object:
 
@@ -195,6 +198,7 @@ Columns:
 - `Source`
 - `Status`
 - `Object`
+- `Local`
 
 Semantics:
 
@@ -212,6 +216,8 @@ Semantics:
 - `Object` links to the created textification JSON in the `textifications/`
   Google Drive folder only when `Status = converted`.
 - `Object` is blank for `already_text`, `unsupported`, `no_text`, and `failed`.
+- `Local` records the created local textification JSON path only when
+  `Status = converted`.
 - Large extracted text, warnings, processor metadata, model metadata, cost, and
   hashes belong in the created JSON object, not in this sheet.
 
@@ -228,6 +234,7 @@ Columns:
 - `Source`
 - `Status`
 - `Object`
+- `Local`
 
 Semantics:
 
@@ -244,6 +251,8 @@ Semantics:
 - `Object` links to the created translation JSON in the `translations/` Google
   Drive folder only when `Status = translated`.
 - `Object` is blank for `already_english` and `failed`.
+- `Local` records the created local translation JSON path only when
+  `Status = translated`.
 - Full translated text, warnings, processor metadata, model metadata, cost, and
   hashes belong in the created JSON object. Translated text later appears in
   `dossier_snapshot.evidence_text`, not in this sheet.
