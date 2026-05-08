@@ -20,9 +20,10 @@ STAGE ?= textify
 CONFIG ?=
 PERSIST ?=
 JSON ?=
+ALL ?=
 CURIO_TEXTIFY := cd "$(DOWNLOADS)" && $(UV) --project "$(CURDIR)" run python -m curio textify --config "$(CURDIR)/config.json"
 PIPELINE_RUN_ARGS = $(if $(strip $(CONFIG)),--config "$(CONFIG)",) $(if $(strip $(LIMIT)),--limit "$(LIMIT)",) $(if $(filter 1 true yes,$(PERSIST)),--persist,) $(if $(strip $(START)),--start "$(START)",) $(if $(strip $(END)),--end "$(END)",) $(if $(strip $(ROW)),--row "$(ROW)",) $(if $(strip $(FROM_ROW)),--from-row "$(FROM_ROW)",) $(if $(strip $(TO_ROW)),--to-row "$(TO_ROW)",) $(if $(filter 1 true yes,$(JSON)),--json,)
-PIPELINE_STAGE_ARGS = $(if $(strip $(CONFIG)),--config "$(CONFIG)",) $(if $(strip $(LIMIT)),--limit "$(LIMIT)",) $(if $(filter 1 true yes,$(PERSIST)),--persist,) $(if $(strip $(START)),--start "$(START)",) $(if $(strip $(END)),--end "$(END)",) $(if $(strip $(SOURCE)),--source "$(SOURCE)",) $(if $(strip $(ROW)),--row "$(ROW)",) $(if $(strip $(FROM_ROW)),--from-row "$(FROM_ROW)",) $(if $(strip $(TO_ROW)),--to-row "$(TO_ROW)",) $(if $(filter 1 true yes,$(JSON)),--json,)
+PIPELINE_STAGE_ARGS = $(if $(strip $(CONFIG)),--config "$(CONFIG)",) $(if $(filter 1 true yes,$(ALL)),,$(if $(strip $(LIMIT)),--limit "$(LIMIT)",)) $(if $(filter 1 true yes,$(ALL)),--all,) $(if $(filter 1 true yes,$(PERSIST)),--persist,) $(if $(strip $(START)),--start "$(START)",) $(if $(strip $(END)),--end "$(END)",) $(if $(strip $(SOURCE)),--source "$(SOURCE)",) $(if $(strip $(ROW)),--row "$(ROW)",) $(if $(strip $(FROM_ROW)),--from-row "$(FROM_ROW)",) $(if $(strip $(TO_ROW)),--to-row "$(TO_ROW)",) $(if $(filter 1 true yes,$(JSON)),--json,)
 PIPELINE_INSPECT_ARGS = $(if $(strip $(CONFIG)),--config "$(CONFIG)",) $(if $(strip $(START)),--start "$(START)",) $(if $(strip $(END)),--end "$(END)",) $(if $(strip $(SOURCE)),--source "$(SOURCE)",) $(if $(strip $(ROW)),--row "$(ROW)",) $(if $(strip $(FROM_ROW)),--from-row "$(FROM_ROW)",) $(if $(strip $(TO_ROW)),--to-row "$(TO_ROW)",) $(if $(filter 1 true yes,$(JSON)),--json,)
 export TEXT
 export ARTIFACT
@@ -58,7 +59,7 @@ help:
 		'make pipeline-run-stage-help  Show the curio pipeline run-stage help' \
 		'make pipeline-run             Append next LIMIT=10 artifact-through items with PERSIST=1; row/date selectors inspect only' \
 		'make pipeline-run-stage       Append next LIMIT=10 stage items with PERSIST=1; override STAGE=textify|translate; selectors inspect only' \
-		'make p-t-n-t LIMIT=300        Append textify then translate stage items with PERSIST=1' \
+		'make p-t-n-t LIMIT=300        Append textify then translate stage items; use ALL=1 for all remaining rows' \
 		'make pipeline-doctor          Run pipeline diagnostics command surface; override input filters START=... END=... ROW=...' \
 		'make build-wheel              Build a wheel for local installation/testing'
 

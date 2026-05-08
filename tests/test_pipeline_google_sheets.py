@@ -1579,6 +1579,164 @@ def test_google_sheets_store_preview_respects_limit_and_selector_filters(tmp_pat
     assert [item.downloads_row for item in translate_filtered] == [3]
 
 
+def test_google_sheets_store_counts_unprocessed_textify_candidates(tmp_path: Path) -> None:
+    values = base_values(
+        textifications=[
+            list(PROCESSOR_HEADERS),
+            [
+                "2026-04-01 12:00:00 UTC",
+                "2026-04-01 12:00:01 UTC",
+                imsgx_url(),
+                "Image",
+                downloads_url(),
+                TextifyProcessStatus.CONVERTED.value,
+                "",
+            ],
+        ]
+    )
+    values["downloads"].extend(
+        [
+            [
+                "2026-04-03 12:00:00 UTC",
+                "2026-04-03 12:00:01 UTC",
+                imsgx_url(9),
+                "https://x.com/example/status/204",
+                "X2",
+                "Text",
+                "Bonjour.",
+            ],
+            [
+                "2026-04-04 12:00:00 UTC",
+                "2026-04-04 12:00:01 UTC",
+                imsgx_url(10),
+                "https://x.com/example/status/205",
+                "X3",
+                "Image",
+                "https://drive.google.com/file/d/second-object",
+            ],
+        ]
+    )
+
+    store = make_store(tmp_path, FakeSession(values_by_tab=values))
+    filtered_store = make_store(
+        tmp_path,
+        FakeSession(values_by_tab=values),
+        PipelineSelector(source="https://x.com/example/status/204"),
+    )
+
+    assert store.unprocessed_candidate_count(PipelineStage.TEXTIFY.value) == 2
+    assert filtered_store.unprocessed_candidate_count(PipelineStage.TEXTIFY.value) == 1
+
+
+def test_google_sheets_store_counts_only_runnable_translate_candidates(tmp_path: Path) -> None:
+    values = base_values(
+        textifications=[
+            list(PROCESSOR_HEADERS),
+            [
+                "2026-04-01 12:00:00 UTC",
+                "2026-04-01 12:00:01 UTC",
+                imsgx_url(),
+                "Image",
+                downloads_url(),
+                TextifyProcessStatus.CONVERTED.value,
+                "",
+            ],
+            [
+                "2026-04-03 12:00:00 UTC",
+                "2026-04-03 12:00:01 UTC",
+                imsgx_url(9),
+                "Image",
+                downloads_url(3),
+                TextifyProcessStatus.UNSUPPORTED.value,
+                "",
+            ],
+            [
+                "2026-04-04 12:00:00 UTC",
+                "2026-04-04 12:00:01 UTC",
+                imsgx_url(10),
+                "Text",
+                downloads_url(4),
+                TextifyProcessStatus.ALREADY_TEXT.value,
+                "",
+            ],
+            [
+                "2026-04-05 12:00:00 UTC",
+                "2026-04-05 12:00:01 UTC",
+                imsgx_url(11),
+                "Text",
+                downloads_url(5),
+                TextifyProcessStatus.ALREADY_TEXT.value,
+                "",
+            ],
+        ],
+        translations=[
+            list(PROCESSOR_HEADERS),
+            [
+                "2026-04-04 12:00:00 UTC",
+                "2026-04-04 12:00:01 UTC",
+                imsgx_url(10),
+                "Text",
+                textification_url(4),
+                TranslateProcessStatus.ALREADY_ENGLISH.value,
+                "",
+            ],
+        ],
+    )
+    values["downloads"].extend(
+        [
+            [
+                "2026-04-03 12:00:00 UTC",
+                "2026-04-03 12:00:01 UTC",
+                imsgx_url(9),
+                "https://x.com/example/status/204",
+                "X2",
+                "Image",
+                "https://drive.google.com/file/d/unsupported-object",
+            ],
+            [
+                "2026-04-04 12:00:00 UTC",
+                "2026-04-04 12:00:01 UTC",
+                imsgx_url(10),
+                "https://x.com/example/status/205",
+                "X3",
+                "Text",
+                "Already translated.",
+            ],
+            [
+                "2026-04-05 12:00:00 UTC",
+                "2026-04-05 12:00:01 UTC",
+                imsgx_url(11),
+                "https://x.com/example/status/206",
+                "X1",
+                "Text",
+                "Bonjour encore.",
+            ],
+            [
+                "2026-04-06 12:00:00 UTC",
+                "2026-04-06 12:00:01 UTC",
+                imsgx_url(12),
+                "https://x.com/example/status/207",
+                "X2",
+                "Text",
+                "Waiting for textify.",
+            ],
+        ]
+    )
+
+    store = make_store(tmp_path, FakeSession(values_by_tab=values))
+    filtered_store = make_store(
+        tmp_path,
+        FakeSession(values_by_tab=values),
+        PipelineSelector(source="https://x.com/example/status/206"),
+    )
+
+    assert store.unprocessed_candidate_count(PipelineStage.TRANSLATE.value) == 2
+    assert filtered_store.unprocessed_candidate_count(PipelineStage.TRANSLATE.value) == 1
+
+    with pytest.raises(GoogleSheetsPipelineStoreError, match="unsupported pipeline stage"):
+        store.unprocessed_candidate_count("dossier")
+
+
 def test_google_sheets_store_previews_existing_textify_record(tmp_path: Path) -> None:
     textifications = [
         list(PROCESSOR_HEADERS),

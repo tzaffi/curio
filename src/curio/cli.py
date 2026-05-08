@@ -1,8 +1,9 @@
 import json
 import uuid
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
+from time import perf_counter
 from typing import Annotated, NoReturn, TextIO, cast
 
 import click
@@ -27,6 +28,7 @@ from curio.pipeline import (
     GoogleDriveArtifactStore,
     GoogleSheetsPipelineStore,
     GoogleSheetsPipelineStoreError,
+    LedgerTab,
     PipelinePreviewItem,
     PipelineRunResult,
     PipelineSelector,
@@ -133,6 +135,27 @@ def _validate_pipeline_persist_mode(
         _fail_usage(f"{command} requires --persist for next-available append sweeps")
 
 
+def _validate_pipeline_all_mode(
+    *,
+    command: str,
+    run_all: bool,
+    persist: bool,
+    limit_was_set: bool,
+    has_selector: bool,
+    json_output: bool,
+) -> None:
+    if not run_all:
+        return
+    if not persist:
+        _fail_usage(f"{command} --all requires --persist")
+    if limit_was_set:
+        _fail_usage(f"{command} --all cannot be combined with --limit")
+    if has_selector:
+        _fail_usage(f"{command} --all cannot be combined with row, date, or source selectors")
+    if json_output:
+        _fail_usage(f"{command} --all cannot be combined with --json")
+
+
 def _validate_pipeline_diagnostic_selector(*, has_selector: bool) -> None:
     if not has_selector:
         _fail_usage("pipeline doctor requires a row, date, or source selector for read-only diagnostics")
@@ -207,28 +230,54 @@ def _run_pipeline_stage(
     config_path: Path | None,
     stage: PipelineStage,
     limit: int,
+    run_all: bool,
+    verbose: bool,
 ) -> None:
     if limit < 1:
         _fail_usage("--limit must be a positive integer")
+    started_at = perf_counter()
     config = _load_curio_config(config_path)
+    effective_limit = limit
+    if run_all:
+        store = _build_pipeline_store_from_config(config, PipelineSelector())
+        effective_limit = store.unprocessed_candidate_count(stage.value)
+        typer.echo(f"Found {effective_limit} unprocessed {stage.value} row(s).")
+        if effective_limit == 0:
+            result = PipelineRunResult(
+                iterations=0,
+                processor_results=(
+                    ProcessorRunResult(
+                        stage=stage.value,
+                        status=ProcessorRunStatus.NO_CANDIDATE,
+                    ),
+                ),
+            )
+            elapsed_seconds = perf_counter() - started_at
+            _write_output(_render_pipeline_run_summary(result, elapsed_seconds=elapsed_seconds), None)
+            return
     try:
         processor = _build_pipeline_processor(stage, config_path, config)
     except (ConfigError, GoogleSheetsPipelineStoreError, LlmCallerError, TextifyError, TranslationError, ValueError, OSError) as exc:
         _fail_runtime(str(exc))
-    store = _build_pipeline_store_from_config(config, PipelineSelector())
+    if not run_all:
+        store = _build_pipeline_store_from_config(config, PipelineSelector())
     artifacts = _build_artifact_store_from_config(config)
     try:
-        with _pipeline_progress_callback(stage=stage, total=limit) as progress_callback:
+        with _pipeline_progress_callback(stage=stage, total=effective_limit) as progress_callback:
             result = run_stage(
                 processor,
                 store=store,
                 artifacts=artifacts,
-                limit=limit,
+                limit=effective_limit,
                 progress_callback=progress_callback,
             )
     except (GoogleApiError, GoogleSheetsPipelineStoreError, LlmCallerError, TextifyError, TranslationError, ValueError, OSError) as exc:
         _fail_runtime(str(exc))
-    _write_output(_render_pipeline_run_result(result), None)
+    elapsed_seconds = perf_counter() - started_at
+    if verbose:
+        _write_output(_render_pipeline_run_result(result), None)
+    _write_output(_render_pipeline_run_summary(result, elapsed_seconds=elapsed_seconds), None)
+    _emit_pipeline_failure_diagnostics(result)
 
 
 def _build_artifact_store_from_config(config: CurioConfig) -> ArtifactStore:
@@ -350,7 +399,7 @@ def _fail_usage(message: str) -> NoReturn:
 
 
 def _fail_runtime(message: str) -> NoReturn:
-    typer.echo(message, err=True)
+    typer.secho(message, fg=typer.colors.RED, err=True)
     raise typer.Exit(1)
 
 
@@ -657,12 +706,121 @@ def _render_pipeline_run_result(result: PipelineRunResult) -> str:
         ),
         *(_pipeline_run_result_row(processor_result) for processor_result in result.processor_results),
     ]
+    return _render_aligned_rows(rows) + "\n"
+
+
+def _render_pipeline_run_summary(result: PipelineRunResult, *, elapsed_seconds: float) -> str:
+    records = [processor_result.record for processor_result in result.processor_results if processor_result.record is not None]
+    appended_rows = len(records)
+    avg_runtime = "avg/row unavailable"
+    if appended_rows > 0:
+        avg_runtime = f"{_format_duration(elapsed_seconds / appended_rows)} avg/row"
+
+    return (
+        f"{_render_pipeline_append_summary(result, records)}\n"
+        f"Runtime: {_format_duration(elapsed_seconds)} total, {avg_runtime}.\n"
+        f"Statuses: {_format_counts(record.status for record in records)}.\n"
+    )
+
+
+def _render_pipeline_append_summary(result: PipelineRunResult, records: Sequence[ProcessRecord]) -> str:
+    if not records:
+        default_tab = _pipeline_result_default_ledger_tab(result)
+        if default_tab is None:
+            return "Appended 0 row(s)."
+        return f"Appended 0 row(s) to the {default_tab} sheet."
+
+    tab_counts = _counts_by_value(record.ledger_tab for record in records)
+    total_rows = sum(tab_counts.values())
+    if len(tab_counts) == 1:
+        tab, count = next(iter(tab_counts.items()))
+        return f"Appended {count} row(s) to the {tab} sheet."
+    return f"Appended {total_rows} row(s) to sheets: {_format_counts_from_mapping(tab_counts)}."
+
+
+def _emit_pipeline_failure_diagnostics(result: PipelineRunResult) -> None:
+    failures = _pipeline_failure_results(result)
+    if not failures:
+        return
+    typer.secho(_render_pipeline_failure_diagnostics(failures), fg=typer.colors.RED, nl=False)
+
+
+def _pipeline_failure_results(result: PipelineRunResult) -> tuple[ProcessorRunResult, ...]:
+    return tuple(
+        processor_result
+        for processor_result in result.processor_results
+        if processor_result.status == ProcessorRunStatus.FAILED
+        or (processor_result.record is not None and processor_result.record.status == "failed")
+    )
+
+
+def _render_pipeline_failure_diagnostics(failures: Sequence[ProcessorRunResult]) -> str:
+    rows = [
+        (
+            "stage",
+            "status",
+            "downloads_row",
+            "source",
+            "record_status",
+            "object",
+            "detail",
+        ),
+        *(_pipeline_run_result_row(processor_result) for processor_result in failures),
+    ]
+    return "Failures:\n" + _render_aligned_rows(rows) + "\n"
+
+
+def _pipeline_result_default_ledger_tab(result: PipelineRunResult) -> str | None:
+    if not result.processor_results:
+        return None
+    return _pipeline_stage_default_ledger_tab(result.processor_results[0].stage)
+
+
+def _pipeline_stage_default_ledger_tab(stage: str) -> str | None:
+    if stage == PipelineStage.TEXTIFY.value:
+        return LedgerTab.TEXTIFICATIONS.value
+    if stage == PipelineStage.TRANSLATE.value:
+        return LedgerTab.TRANSLATIONS.value
+    return None
+
+
+def _counts_by_value(values: Iterable[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in values:
+        counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
+def _format_counts(values: Iterable[str]) -> str:
+    return _format_counts_from_mapping(_counts_by_value(values))
+
+
+def _format_counts_from_mapping(counts: dict[str, int]) -> str:
+    if not counts:
+        return "none"
+    return ", ".join(f"{value}={count}" for value, count in counts.items())
+
+
+def _format_duration(seconds: float) -> str:
+    bounded_seconds = max(0.0, seconds)
+    if bounded_seconds < 60:
+        return f"{bounded_seconds:.2f}s"
+
+    rounded_seconds = round(bounded_seconds)
+    minutes, remaining_seconds = divmod(rounded_seconds, 60)
+    hours, remaining_minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}:{remaining_minutes:02d}:{remaining_seconds:02d}"
+    return f"{remaining_minutes}:{remaining_seconds:02d}"
+
+
+def _render_aligned_rows(rows: Sequence[Sequence[str]]) -> str:
     widths = [max(len(row[index]) for row in rows) for index in range(len(rows[0]))]
     rendered_rows = [
         "  ".join(value.ljust(widths[index]) for index, value in enumerate(row)).rstrip()
         for row in rows
     ]
-    return "\n".join(rendered_rows) + "\n"
+    return "\n".join(rendered_rows)
 
 
 def _pipeline_run_result_row(result: ProcessorRunResult) -> tuple[str, str, str, str, str, str, str]:
@@ -1083,6 +1241,7 @@ def pipeline_run(
 
 @pipeline_app.command("run-stage")
 def pipeline_run_stage(
+    ctx: typer.Context,
     stage: Annotated[PipelineStage, typer.Argument(help="Pipeline stage to run.")],
     config_path: Annotated[
         Path | None,
@@ -1109,6 +1268,11 @@ def pipeline_run_stage(
         typer.Option("--to-row", help="Preview upstream downloads input rows at or before this row number."),
     ] = None,
     json_output: Annotated[bool, typer.Option("--json", help="Print machine-readable preview JSON.")] = False,
+    run_all: Annotated[
+        bool,
+        typer.Option("--all", help="Process every currently unprocessed stage candidate."),
+    ] = False,
+    verbose: Annotated[bool, typer.Option("--verbose", help="Print per-row stage details after the progress bar.")] = False,
 ) -> None:
     """Run one pipeline stage."""
     has_selector = _has_pipeline_selector(
@@ -1118,6 +1282,14 @@ def pipeline_run_stage(
         row=row,
         from_row=from_row,
         to_row=to_row,
+    )
+    _validate_pipeline_all_mode(
+        command=f"pipeline run-stage {stage.value}",
+        run_all=run_all,
+        persist=persist,
+        limit_was_set=_parameter_was_set(ctx, "limit"),
+        has_selector=has_selector,
+        json_output=json_output,
     )
     _validate_pipeline_persist_mode(
         command=f"pipeline run-stage {stage.value}",
@@ -1141,7 +1313,7 @@ def pipeline_run_stage(
             json_output=json_output,
         )
         return
-    _run_pipeline_stage(config_path=config_path, stage=stage, limit=limit)
+    _run_pipeline_stage(config_path=config_path, stage=stage, limit=limit, run_all=run_all, verbose=verbose)
 
 
 @pipeline_app.command("doctor")

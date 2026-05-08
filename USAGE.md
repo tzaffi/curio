@@ -289,9 +289,9 @@ processor. Full `pipeline run --persist` remains reserved until the next
 pipeline checkpoint.
 
 Append-capable pipeline commands are deliberately narrow. A next-available sweep
-requires `--persist`; without it, Curio must fail before mutating anything. The
-only append selector is the effective `--limit`; processor tabs are append-only
-and write to the first available row.
+requires `--persist`; without it, Curio must fail before mutating anything. Use
+`--limit` for a bounded sweep or `--all` for every currently unprocessed stage
+candidate. Processor tabs are append-only and write to the first available row.
 
 Append the next 10 textify candidates:
 
@@ -300,14 +300,24 @@ uv run python -m curio pipeline run-stage textify --persist
 make pipeline-run-stage STAGE=textify PERSIST=1
 ```
 
-Mutating run-stage output includes a `detail` column. For a recorded `failed`
-row, `detail` shows the exception type and message from that run.
+By default, mutating run-stage output prints a compact summary with appended row
+count, target sheet, total runtime, average runtime per appended row, and status
+counts. Add `--verbose` to include the per-row details table. Recorded `failed`
+rows are always summarized at the end with the exception type and message.
 
 Append the next 25 translation candidates:
 
 ```bash
 uv run python -m curio pipeline run-stage translate --limit 25 --persist
 make pipeline-run-stage STAGE=translate LIMIT=25 PERSIST=1
+```
+
+Append every currently unprocessed textify candidate:
+
+```bash
+uv run python -m curio pipeline run-stage textify --all --persist
+make pipeline-run-stage STAGE=textify ALL=1 PERSIST=1
+make p-t-n-t ALL=1
 ```
 
 For `already_text` inputs, translation reads the deterministic local iMsgX

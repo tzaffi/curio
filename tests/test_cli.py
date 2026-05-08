@@ -1,6 +1,7 @@
 import io
 import json
 from collections.abc import Sequence
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -115,6 +116,17 @@ class FailingFlushPipelineStore(InMemoryPipelineStore):
         raise cli.GoogleApiError("Unable to append Google Sheet rows: HTTP 429 Too Many Requests")
 
 
+class CountingPipelineStore(InMemoryPipelineStore):
+    def __init__(self, candidates_by_stage: dict[str, list[ProcessCandidate]], *, unprocessed_count: int) -> None:
+        super().__init__(candidates_by_stage)
+        self.unprocessed_count = unprocessed_count
+        self.count_calls: list[str] = []
+
+    def unprocessed_candidate_count(self, stage: str) -> int:
+        self.count_calls.append(stage)
+        return self.unprocessed_count
+
+
 def make_preview_item(stage: str = "textify") -> PipelinePreviewItem:
     ref = ProcessRef(stage="download", tab="downloads", source="x://post/123", row_number=25)
     return PipelinePreviewItem(
@@ -195,6 +207,33 @@ def make_textify_process_candidate(tmp_path: Path) -> ProcessCandidate:
             "name": artifact.name,
             "mime_type": "image/png",
             "request_id": "textify-pipeline-test",
+        },
+    )
+
+
+def make_numbered_textify_process_candidate(tmp_path: Path, row_number: int) -> ProcessCandidate:
+    artifact = tmp_path / "downloads" / f"imsgx-r{row_number:04d}-x1-image-{row_number}-photo-1.png"
+    artifact.parent.mkdir(exist_ok=True)
+    artifact.write_bytes(b"png")
+    source = f"x://post/{row_number}"
+    ref = ProcessRef(
+        stage="download",
+        tab="downloads",
+        source=source,
+        row_number=row_number,
+        artifact_path=str(artifact),
+        artifact_sha256=f"sha-{row_number}",
+    )
+    return ProcessCandidate(
+        source_ref=ref,
+        imsgx=ref,
+        source=source,
+        artifact_key=artifact.name,
+        metadata={
+            "path": str(artifact),
+            "name": artifact.name,
+            "mime_type": "image/png",
+            "request_id": f"textify-pipeline-test-{row_number}",
         },
     )
 
@@ -553,8 +592,8 @@ def test_pipeline_run_stage_textify_persist_executes_processor(
 
     assert result.exit_code == 0
     assert "pipeline run-stage is reserved" not in result.output
-    assert "textify" in result.output
-    assert "recorded" in result.output
+    assert "Appended 1 row(s) to the textifications sheet." in result.output
+    assert "Runtime:" in result.output
     assert TextifyProcessStatus.CONVERTED.value in result.output
     assert selectors == [PipelineSelector()]
     assert textify_service_calls == [
@@ -572,6 +611,97 @@ def test_pipeline_run_stage_textify_persist_executes_processor(
     assert store.records[0].object_.path is not None
     assert Path(store.records[0].object_.path).exists()
     assert Path(store.records[0].object_.path).parent == tmp_path / "artifacts" / "textifications"
+
+
+def test_pipeline_run_stage_all_counts_and_uses_unprocessed_total(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = make_runtime_config(tmp_path)
+    candidates = [
+        make_numbered_textify_process_candidate(tmp_path, 25),
+        make_numbered_textify_process_candidate(tmp_path, 26),
+    ]
+    store = CountingPipelineStore({PipelineStage.TEXTIFY.value: candidates}, unprocessed_count=2)
+    selectors: list[PipelineSelector] = []
+    progress_totals: list[tuple[PipelineStage, int]] = []
+    service = FakeTextifyService()
+    install_fake_pipeline_runtime_store(monkeypatch, config, store, selectors)
+    monkeypatch.setattr(cli, "_build_textify_service", lambda _llm_caller, _config_path, config=None, **_kwargs: service)
+
+    @contextmanager
+    def fake_progress_callback(stage: PipelineStage, total: int):
+        progress_totals.append((stage, total))
+        yield lambda _result: None
+
+    monkeypatch.setattr(cli, "_pipeline_progress_callback", fake_progress_callback)
+
+    result = runner.invoke(app, ["pipeline", "run-stage", "textify", "--persist", "--all"])
+
+    assert result.exit_code == 0
+    assert "Found 2 unprocessed textify row(s)." in result.output
+    assert "Appended 2 row(s) to the textifications sheet." in result.output
+    assert store.count_calls == [PipelineStage.TEXTIFY.value]
+    assert progress_totals == [(PipelineStage.TEXTIFY, 2)]
+    assert len(service.requests) == 2
+    assert [record.source_ref.row_number for record in store.records] == [25, 26]
+    assert selectors == [PipelineSelector()]
+
+
+def test_pipeline_run_stage_all_zero_skips_processor_and_artifact_build(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = make_runtime_config(tmp_path)
+    store = CountingPipelineStore({PipelineStage.TEXTIFY.value: []}, unprocessed_count=0)
+    selectors: list[PipelineSelector] = []
+    install_fake_pipeline_runtime_store(monkeypatch, config, store, selectors)
+    monkeypatch.setattr(
+        cli,
+        "_build_textify_service",
+        lambda _llm_caller, _config_path, config=None, **_kwargs: (_ for _ in ()).throw(AssertionError("should not build processor")),
+    )
+    monkeypatch.setattr(
+        cli.GoogleDriveArtifactStore,
+        "from_config",
+        staticmethod(lambda **_kwargs: (_ for _ in ()).throw(AssertionError("should not build artifact store"))),
+    )
+
+    result = runner.invoke(app, ["pipeline", "run-stage", "textify", "--persist", "--all"])
+
+    assert result.exit_code == 0
+    assert "Found 0 unprocessed textify row(s)." in result.output
+    assert "Appended 0 row(s) to the textifications sheet." in result.output
+    assert "Statuses: none." in result.output
+    assert store.count_calls == [PipelineStage.TEXTIFY.value]
+    assert store.records == ()
+    assert selectors == [PipelineSelector()]
+
+
+def test_pipeline_run_stage_verbose_renders_per_row_table(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = make_runtime_config(tmp_path)
+    candidate = make_textify_process_candidate(tmp_path)
+    store = InMemoryPipelineStore({PipelineStage.TEXTIFY.value: [candidate]})
+    selectors: list[PipelineSelector] = []
+    install_fake_pipeline_runtime_store(monkeypatch, config, store, selectors)
+    monkeypatch.setattr(
+        cli,
+        "_build_textify_service",
+        lambda _llm_caller, _config_path, config=None, **_kwargs: FakeTextifyService(),
+    )
+
+    result = runner.invoke(app, ["pipeline", "run-stage", "textify", "--limit", "1", "--persist", "--verbose"])
+
+    assert result.exit_code == 0
+    assert "stage" in result.output
+    assert "record_status" in result.output
+    assert "recorded" in result.output
+    assert TextifyProcessStatus.CONVERTED.value in result.output
+    assert "Appended 1 row(s) to the textifications sheet." in result.output
+    assert selectors == [PipelineSelector()]
 
 
 def test_pipeline_run_stage_always_uses_drive_artifact_store(
@@ -654,8 +784,7 @@ def test_pipeline_run_stage_textify_persist_records_unsupported_video_without_se
     )
 
     assert result.exit_code == 0
-    assert "textify" in result.output
-    assert "recorded" in result.output
+    assert "Appended 1 row(s) to the textifications sheet." in result.output
     assert TextifyProcessStatus.UNSUPPORTED.value in result.output
     assert "failed" not in result.output
     assert selectors == [PipelineSelector()]
@@ -680,8 +809,7 @@ def test_pipeline_run_stage_translate_persist_executes_processor(
     result = runner.invoke(app, ["pipeline", "run-stage", "translate", "--limit", "1", "--persist"])
 
     assert result.exit_code == 0
-    assert "translate" in result.output
-    assert "recorded" in result.output
+    assert "Appended 1 row(s) to the translations sheet." in result.output
     assert TranslateProcessStatus.TRANSLATED.value in result.output
     assert selectors == [PipelineSelector()]
     assert len(service.requests) == 1
@@ -705,8 +833,9 @@ def test_pipeline_run_stage_persist_reports_no_candidate(
     result = runner.invoke(app, ["pipeline", "run-stage", "textify", "--limit", "1", "--persist"])
 
     assert result.exit_code == 0
-    assert "no_candidate" in result.output
-    assert "record_status" in result.output
+    assert "Appended 0 row(s) to the textifications sheet." in result.output
+    assert "avg/row unavailable" in result.output
+    assert "Statuses: none." in result.output
     assert selectors == [PipelineSelector()]
 
 
@@ -999,6 +1128,10 @@ def test_pipeline_run_result_detail_fallbacks() -> None:
         stage=PipelineStage.TEXTIFY.value,
         status=cli.ProcessorRunStatus.FAILED,
     )
+    no_candidate_result = cli.ProcessorRunResult(
+        stage=PipelineStage.TEXTIFY.value,
+        status=cli.ProcessorRunStatus.NO_CANDIDATE,
+    )
     failed_record = ProcessRecord(
         stage=PipelineStage.TEXTIFY.value,
         ledger_tab="textifications",
@@ -1011,6 +1144,59 @@ def test_pipeline_run_result_detail_fallbacks() -> None:
 
     assert cli._pipeline_run_result_detail(failed_result, object()) == "-"
     assert cli._pipeline_run_result_detail(failed_result, failed_record) == "only error"
+    assert cli._pipeline_run_result_detail(no_candidate_result, None) == "no candidate"
+
+
+def test_pipeline_run_summary_formats_counts_and_duration_edges() -> None:
+    ref = ProcessRef(stage="download", tab="downloads", source="source", row_number=1)
+    textify_record = ProcessRecord(
+        stage=PipelineStage.TEXTIFY.value,
+        ledger_tab="textifications",
+        version="processor-v1",
+        source_ref=ref,
+        imsgx=ref,
+        status=TextifyProcessStatus.CONVERTED.value,
+    )
+    translate_record = ProcessRecord(
+        stage=PipelineStage.TRANSLATE.value,
+        ledger_tab="translations",
+        version="processor-v1",
+        source_ref=ref,
+        imsgx=ref,
+        status=TranslateProcessStatus.ALREADY_ENGLISH.value,
+    )
+    summary = cli._render_pipeline_run_summary(
+        cli.PipelineRunResult(
+            iterations=2,
+            processor_results=(
+                cli.ProcessorRunResult(
+                    stage=PipelineStage.TEXTIFY.value,
+                    status=cli.ProcessorRunStatus.RECORDED,
+                    record=textify_record,
+                ),
+                cli.ProcessorRunResult(
+                    stage=PipelineStage.TRANSLATE.value,
+                    status=cli.ProcessorRunStatus.RECORDED,
+                    record=translate_record,
+                ),
+            ),
+        ),
+        elapsed_seconds=3661.2,
+    )
+
+    assert "Appended 2 row(s) to sheets: textifications=1, translations=1." in summary
+    assert "Runtime: 1:01:01 total, 30:31 avg/row." in summary
+    assert "Statuses: converted=1, already_english=1." in summary
+
+    empty_summary = cli._render_pipeline_run_summary(
+        cli.PipelineRunResult(iterations=0, processor_results=()),
+        elapsed_seconds=61,
+    )
+
+    assert "Appended 0 row(s)." in empty_summary
+    assert "Runtime: 1:01 total, avg/row unavailable." in empty_summary
+    assert cli._pipeline_stage_default_ledger_tab(PipelineStage.TRANSLATE.value) == "translations"
+    assert cli._pipeline_stage_default_ledger_tab("unknown") is None
 
 
 def test_pipeline_next_available_sweeps_require_persist() -> None:
@@ -1043,6 +1229,20 @@ def test_pipeline_persist_rejects_json_output() -> None:
 
     assert result.exit_code == 2
     assert "--json cannot be combined with --persist" in result.output
+
+
+def test_pipeline_run_stage_all_rejects_invalid_option_combinations() -> None:
+    cases = (
+        (("textify", "--all"), "--all requires --persist"),
+        (("textify", "--persist", "--all", "--limit", "5"), "--all cannot be combined with --limit"),
+        (("textify", "--persist", "--all", "--row", "7"), "--all cannot be combined with row, date, or source selectors"),
+        (("textify", "--persist", "--all", "--json"), "--all cannot be combined with --json"),
+    )
+    for args, message in cases:
+        result = runner.invoke(app, ["pipeline", "run-stage", *args])
+
+        assert result.exit_code == 2
+        assert message in result.output
 
 
 def test_pipeline_doctor_requires_selector() -> None:

@@ -1,7 +1,7 @@
 import json
 import mimetypes
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from html.parser import HTMLParser
 from pathlib import Path
@@ -232,6 +232,13 @@ class GoogleSheetsPipelineStore:
             return self._next_translate_candidate()
         raise GoogleSheetsPipelineStoreError(f"unsupported pipeline stage for current scope: {stage}")
 
+    def unprocessed_candidate_count(self, stage: str) -> int:
+        if stage == PipelineStage.TEXTIFY.value:
+            return sum(1 for _candidate in self._iter_textify_candidates())
+        if stage == PipelineStage.TRANSLATE.value:
+            return sum(1 for _candidate in self._iter_translate_candidates())
+        raise GoogleSheetsPipelineStoreError(f"unsupported pipeline stage for current scope: {stage}")
+
     def preview_stage(self, stage: str, *, limit: int) -> tuple[PipelinePreviewItem, ...]:
         if limit < 1:
             raise ValueError("limit must be a positive integer")
@@ -326,16 +333,21 @@ class GoogleSheetsPipelineStore:
         )
 
     def _next_textify_candidate(self) -> ProcessCandidate | None:
+        return next(self._iter_textify_candidates(), None)
+
+    def _iter_textify_candidates(self) -> Iterator[ProcessCandidate]:
         for row in self._downloads:
             if not self._selector_matches(row):
                 continue
             candidate = self._textify_candidate(row)
             if self._has_any_processor_row(self._textifications, candidate):
                 continue
-            return candidate
-        return None
+            yield candidate
 
     def _next_translate_candidate(self) -> ProcessCandidate | None:
+        return next(self._iter_translate_candidates(), None)
+
+    def _iter_translate_candidates(self) -> Iterator[ProcessCandidate]:
         for download in self._downloads:
             if not self._selector_matches(download):
                 continue
@@ -350,8 +362,7 @@ class GoogleSheetsPipelineStore:
             candidate = self._translate_candidate(download, textification)
             if self._has_any_processor_row(self._translations, candidate):
                 continue
-            return candidate
-        return None
+            yield candidate
 
     def _preview_textify(self, *, limit: int) -> list[PipelinePreviewItem]:
         items: list[PipelinePreviewItem] = []

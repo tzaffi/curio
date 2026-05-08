@@ -255,13 +255,15 @@ and stop at the requested limit or first unrecoverable runtime failure.
 Append-capable commands are intentionally narrow:
 
 - `--limit N`
+- `--all` for `pipeline run-stage STAGE`
 - `--persist`
 
 `pipeline run` and `pipeline run-stage STAGE` may append only for next-available
 limited sweeps. `--limit` defaults to `10`, so `pipeline run-stage textify
---persist` means "append rows for the next 10 textify candidates." Without
-`--persist`, the same next-available sweep must fail rather than mutating
-implicitly.
+--persist` means "append rows for the next 10 textify candidates." For
+`pipeline run-stage`, `--all` counts currently unprocessed stage candidates
+before mutating and uses that count as the progress total. Without `--persist`,
+the same next-available sweep must fail rather than mutating implicitly.
 
 Targeted selectors are preview-only and must not be combined with `--persist`:
 
@@ -290,8 +292,10 @@ sheet state and render a plan, but never append rows, write artifacts, or call
 providers. `pipeline run-stage textify --persist` and
 `pipeline run-stage translate --persist` execute the selected processor against
 the configured Google Sheet and local artifact store. Mutating run-stage output
-includes a `detail` column that renders the exception type and message when a
-processor records a `failed` row. Full
+prints a compact appended-row summary by default; `--all` first logs the number
+of currently unprocessed stage candidates. Add `--verbose` to include the per-row
+details table. Recorded `failed` rows are always summarized at the end with the
+exception type and message. Full
 `pipeline run --persist` remains reserved until the next executable pipeline
 checkpoint.
 
