@@ -77,6 +77,16 @@ class TextifyProcessor(Processor):
                     "warnings": [unsupported_reason],
                 },
             )
+        missing_link_reason = _missing_link_textify_reason(candidate)
+        if missing_link_reason is not None:
+            return Eligibility(
+                eligible=False,
+                status=TextifyProcessStatus.ALREADY_TEXT.value,
+                metadata={
+                    "textify_status": TextifyStatus.SKIPPED_TEXT_MEDIA.value,
+                    "warnings": [missing_link_reason],
+                },
+            )
         return Eligibility(eligible=True, status=TextifyProcessStatus.CONVERTED.value)
 
     def process(self, candidate: ProcessCandidate) -> ProcessOutcome:
@@ -269,6 +279,19 @@ def _known_unsupported_textify_reason(candidate: ProcessCandidate) -> str | None
             return "unsupported media type for textify v1: animated gif"
     if any(_looks_like_video_resource(value) for value in _candidate_textify_identity_values(candidate)):
         return "unsupported media type for textify v1: video"
+    return None
+
+
+def _missing_link_textify_reason(candidate: ProcessCandidate) -> str | None:
+    metadata = candidate.metadata
+    path = _metadata_string(metadata, "path", candidate.source_ref.artifact_path)
+    if path is not None:
+        return None
+    for field_name in ("type", "column"):
+        value = _metadata_string(metadata, field_name)
+        normalized_value = "" if value is None else _compact_media_value(value)
+        if normalized_value == "link":
+            return "link has no downloaded artifact for textify; using URL as text"
     return None
 
 

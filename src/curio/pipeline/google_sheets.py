@@ -15,7 +15,6 @@ from curio.google_api import (
     build_authorized_session,
     raise_for_status,
 )
-from curio.pipeline.memory import FAILED_STATUS
 from curio.pipeline.models import (
     ArtifactRef,
     JsonObject,
@@ -252,8 +251,6 @@ class GoogleSheetsPipelineStore:
     ) -> ProcessRecord | None:
         rows = self._processor_rows_for_tab(ledger_tab)
         for row in reversed(rows):
-            if row.status == FAILED_STATUS:
-                continue
             if not _visible_source_matches_ref(row.source, candidate.source_ref):
                 continue
             if not _visible_source_matches_ref(row.imsgx, candidate.imsgx):
@@ -762,12 +759,32 @@ class GoogleSheetsPipelineStore:
         return None
 
     def _download_for_ref(self, ref: ProcessRef) -> _DownloadRow | None:
+        if ref.row_number is not None:
+            for row in self._downloads:
+                if row.row_number == ref.row_number:
+                    return row
+            return None
+        if ref.row_url is not None:
+            for row in self._downloads:
+                if _visible_source_matches_ref(self._row_url(self.config.tabs.downloads, row.row_number), ref):
+                    return row
+            return None
         for row in self._downloads:
             if _visible_source_matches_ref(row.source, ref) or _visible_source_matches_ref(self._row_url(self.config.tabs.downloads, row.row_number), ref):
                 return row
         return None
 
     def _processor_row_for_ref(self, rows: Sequence[_ProcessorRow], ref: ProcessRef) -> _ProcessorRow | None:
+        if ref.row_number is not None:
+            for row in rows:
+                if row.row_number == ref.row_number:
+                    return row
+            return None
+        if ref.row_url is not None:
+            for row in rows:
+                if _visible_source_matches_ref(self._row_url(ref.tab, row.row_number), ref):
+                    return row
+            return None
         for row in rows:
             if _visible_source_matches_ref(row.source, ref) or _visible_source_matches_ref(self._row_url(ref.tab, row.row_number), ref):
                 return row

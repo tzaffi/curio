@@ -25,19 +25,21 @@ from curio.pipeline import (
     PipelineSelector,
     PipelineStage,
     ProcessorObject,
+    ProcessorRunStatus,
     ProcessRecord,
     ProcessRef,
     TextifyProcessor,
     TextifyProcessStatus,
     TranslateProcessStatus,
     run_processor_once,
+    run_stage,
 )
 from curio.pipeline.google_sheets import (
     DOWNLOAD_HEADERS,
     IMSGX_HEADERS,
     PROCESSOR_HEADERS,
 )
-from curio.textify import TextifyService
+from curio.textify import TextifyService, TextifyStatus
 
 
 class FakeResponse:
@@ -302,6 +304,100 @@ def test_google_sheets_store_skips_existing_textification_and_finds_existing_rec
     assert record.status == TextifyProcessStatus.CONVERTED.value
     assert record.object_ is not None
     assert record.object_.path == "/tmp/textification.json"
+
+
+def test_google_sheets_run_stage_records_failed_duplicate_source_with_exact_imsgx(tmp_path: Path) -> None:
+    duplicate_source = "https://www.skool.com/ai-profit-lab-7462/about"
+    textifications = [
+        list(PROCESSOR_HEADERS),
+        [
+            "2026-04-26 23:04:59 UTC",
+            "2026-04-26 16:34:54 UTC",
+            imsgx_url(8),
+            "Image",
+            downloads_url(2),
+            TextifyProcessStatus.CONVERTED.value,
+            "",
+            "/tmp/textification.json",
+        ],
+    ]
+    values = base_values(textifications=textifications)
+    values["downloads"][1] = [
+        "2026-04-26 23:04:59 UTC",
+        "2026-04-26 16:34:54 UTC",
+        imsgx_url(8),
+        duplicate_source,
+        "X3",
+        "Image",
+        "https://drive.google.com/file/d/object-1",
+    ]
+    values["downloads"].append(
+        [
+            "2026-04-27 15:56:24 UTC",
+            "2026-04-27 10:13:15 UTC",
+            imsgx_url(9),
+            duplicate_source,
+            "X3",
+            "Image",
+            "https://drive.google.com/file/d/object-2",
+        ]
+    )
+    session = FakeSession(values_by_tab=values)
+    store = make_store(tmp_path, session)
+
+    result = run_stage(TextifyProcessor(TextifyService()), store=store, artifacts=InMemoryArtifactStore(), limit=2)
+
+    assert [processor_result.status for processor_result in result.processor_results] == [
+        ProcessorRunStatus.FAILED,
+        ProcessorRunStatus.NO_CANDIDATE,
+    ]
+    appended = session.values_by_tab["textifications"][-1]
+    assert appended == [
+        "2026-04-27 15:56:24 UTC",
+        "2026-04-27 10:13:15 UTC",
+        imsgx_url(9),
+        "Image",
+        downloads_url(3),
+        TextifyProcessStatus.FAILED.value,
+        "",
+        "",
+    ]
+    assert store.next_candidate(PipelineStage.TEXTIFY.value) is None
+
+
+def test_google_sheets_store_records_missing_link_without_artifact_as_already_text(tmp_path: Path) -> None:
+    values = base_values()
+    values["downloads"][1] = [
+        "2026-04-26 23:04:59 UTC",
+        "2026-04-26 16:34:54 UTC",
+        imsgx_url(),
+        "https://www.skool.com/ai-profit-lab-7462/about",
+        "X3",
+        "Link",
+        "https://www.skool.com/ai-profit-lab-7462/about",
+    ]
+    session = FakeSession(values_by_tab=values)
+    store = make_store(tmp_path, session)
+
+    result = run_processor_once(TextifyProcessor(TextifyService()), store=store, artifacts=InMemoryArtifactStore())
+
+    assert result.record is not None
+    assert result.record.status == TextifyProcessStatus.ALREADY_TEXT.value
+    assert result.record.metadata == {
+        "textify_status": TextifyStatus.SKIPPED_TEXT_MEDIA.value,
+        "warnings": ["link has no downloaded artifact for textify; using URL as text"],
+    }
+    store.flush_records()
+    assert session.values_by_tab["textifications"][-1] == [
+        "2026-04-26 23:04:59 UTC",
+        "2026-04-26 16:34:54 UTC",
+        imsgx_url(),
+        "Link",
+        downloads_url(),
+        TextifyProcessStatus.ALREADY_TEXT.value,
+        "",
+        "",
+    ]
 
 
 def test_google_sheets_store_reads_legacy_object_local_path_without_local_column(tmp_path: Path) -> None:
@@ -925,6 +1021,78 @@ def test_google_sheets_processor_header_and_cell_helper_branches(tmp_path: Path)
     assert google_sheets_module._last_column_for_tab("textifications", pipeline_config(tmp_path / "downloads")) == "H"
 
 
+def test_google_sheets_store_ref_lookup_exact_and_fallback_branches(tmp_path: Path) -> None:
+    textifications = [
+        list(PROCESSOR_HEADERS),
+        [
+            "2026-04-01 12:00:00 UTC",
+            "2026-04-01 12:00:01 UTC",
+            imsgx_url(),
+            "Image",
+            downloads_url(),
+            TextifyProcessStatus.CONVERTED.value,
+            "",
+            "/tmp/textification.json",
+        ],
+    ]
+    store = make_store(tmp_path, FakeSession(values_by_tab=base_values(textifications=textifications)))
+
+    assert store._download_for_ref(ProcessRef(stage="download", tab="downloads", source="missing", row_number=99)) is None
+    assert (
+        store._download_for_ref(ProcessRef(stage="download", tab="downloads", source="row-url", row_url=downloads_url()))
+        == store._downloads[0]
+    )
+    assert (
+        store._download_for_ref(ProcessRef(stage="download", tab="downloads", source="missing", row_url=downloads_url(99)))
+        is None
+    )
+    assert (
+        store._download_for_ref(
+            ProcessRef(stage="download", tab="downloads", source="https://x.com/example/status/203")
+        )
+        == store._downloads[0]
+    )
+
+    assert (
+        store._processor_row_for_ref(
+            store._textifications,
+            ProcessRef(stage=PipelineStage.TEXTIFY.value, tab="textifications", source="missing", row_number=99),
+        )
+        is None
+    )
+    assert (
+        store._processor_row_for_ref(
+            store._textifications,
+            ProcessRef(
+                stage=PipelineStage.TEXTIFY.value,
+                tab="textifications",
+                source="row-url",
+                row_url=textification_url(),
+            ),
+        )
+        == store._textifications[0]
+    )
+    assert (
+        store._processor_row_for_ref(
+            store._textifications,
+            ProcessRef(
+                stage=PipelineStage.TEXTIFY.value,
+                tab="textifications",
+                source="missing",
+                row_url=textification_url(99),
+            ),
+        )
+        is None
+    )
+    assert (
+        store._processor_row_for_ref(
+            store._textifications,
+            ProcessRef(stage=PipelineStage.TEXTIFY.value, tab="textifications", source=downloads_url()),
+        )
+        == store._textifications[0]
+    )
+
+
 def test_google_sheets_client_rejects_invalid_payloads_and_http_errors() -> None:
     client = GoogleSheetsClient(StaticSession(FakeResponse([], status_code=500, reason="Error", text="boom")), "sheet")
     with pytest.raises(GoogleApiError, match="Unable to read Google Sheet"):
@@ -1192,7 +1360,7 @@ def test_google_sheets_store_defensive_branches_and_factory(
         )
 
 
-def test_google_sheets_store_existing_record_miss_branches(tmp_path: Path) -> None:
+def test_google_sheets_store_existing_record_includes_failed_records(tmp_path: Path) -> None:
     textifications = [
         list(PROCESSOR_HEADERS),
         [
@@ -1220,6 +1388,41 @@ def test_google_sheets_store_existing_record_miss_branches(tmp_path: Path) -> No
             "Image",
             downloads_url(),
             "failed",
+            "",
+        ],
+    ]
+    store = make_store(tmp_path, FakeSession(values_by_tab=base_values(textifications=textifications)))
+    candidate = store._textify_candidate(store._downloads[0])
+
+    record = store.existing_record(
+        stage=PipelineStage.TEXTIFY.value,
+        ledger_tab=LedgerTab.TEXTIFICATIONS.value,
+        version="processor-v1",
+        candidate=candidate,
+    )
+    assert record is not None
+    assert record.status == TextifyProcessStatus.FAILED.value
+
+
+def test_google_sheets_store_existing_record_miss_branches(tmp_path: Path) -> None:
+    textifications = [
+        list(PROCESSOR_HEADERS),
+        [
+            "2026-04-01 12:00:00 UTC",
+            "2026-04-01 12:00:01 UTC",
+            "different-imsgx",
+            "Image",
+            downloads_url(),
+            TextifyProcessStatus.CONVERTED.value,
+            "",
+        ],
+        [
+            "2026-04-01 12:00:00 UTC",
+            "2026-04-01 12:00:01 UTC",
+            imsgx_url(),
+            "Image",
+            "different-source",
+            TextifyProcessStatus.CONVERTED.value,
             "",
         ],
     ]

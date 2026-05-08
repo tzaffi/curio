@@ -213,6 +213,16 @@ class StaticExistingStore:
         return ref
 
 
+class RepeatingCandidateStore(InMemoryPipelineStore):
+    def __init__(self, candidate: ProcessCandidate) -> None:
+        super().__init__({PipelineStage.TEXTIFY.value: [candidate]})
+        self.candidate = candidate
+
+    def next_candidate(self, stage: str) -> ProcessCandidate | None:
+        del stage
+        return self.candidate
+
+
 def test_pipeline_root_exports_scheduler_contracts() -> None:
     assert "InMemoryArtifactStore" in pipeline.__all__
     assert "InMemoryPipelineStore" in pipeline.__all__
@@ -223,7 +233,7 @@ def test_pipeline_root_exports_scheduler_contracts() -> None:
     assert "run_stage" in pipeline.__all__
 
 
-def test_in_memory_store_selects_unhandled_candidates_and_skips_failures_by_default() -> None:
+def test_in_memory_store_selects_unhandled_candidates_and_treats_failures_as_existing() -> None:
     first = make_candidate("x://post/1", 1)
     second = make_candidate("x://post/2", 2)
     store = InMemoryPipelineStore({PipelineStage.TEXTIFY.value: [first, second]})
@@ -246,7 +256,7 @@ def test_in_memory_store_selects_unhandled_candidates_and_skips_failures_by_defa
         ledger_tab=LedgerTab.TEXTIFICATIONS.value,
         version="processor-v1",
         candidate=first,
-    ) is None
+    ) == failed_record
     assert store.next_candidate(PipelineStage.TEXTIFY.value) == second
     assert store.resolve_ref(second.source_ref) == second.source_ref
 
@@ -666,6 +676,18 @@ def test_run_stage_records_failure_and_continues_to_unrelated_source() -> None:
         "error": "planned failure for x://post/1",
     }
     assert result.made_progress is True
+
+
+def test_run_stage_aborts_before_reprocessing_same_candidate() -> None:
+    candidate = make_candidate("x://post/1", 1)
+    store = RepeatingCandidateStore(candidate)
+    artifacts = InMemoryArtifactStore()
+
+    with pytest.raises(RuntimeError, match="same candidate twice"):
+        run_stage(StageProcessor(), store=store, artifacts=artifacts, limit=2)
+
+    assert store.records == ()
+    assert artifacts.objects == {}
 
 
 def test_run_stage_flushes_records_once_at_end() -> None:

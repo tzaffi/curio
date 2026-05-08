@@ -55,7 +55,6 @@ class InMemoryPipelineStore:
                 record.stage == stage
                 and record.ledger_tab == ledger_tab
                 and record.version == version
-                and record.status != FAILED_STATUS
                 and _candidate_matches_record(candidate, record)
             ):
                 return record

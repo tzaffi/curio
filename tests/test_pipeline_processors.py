@@ -271,6 +271,34 @@ def test_textify_processor_known_unsupported_video_classifiers_skip_before_reque
     assert service.requests == []
 
 
+def test_textify_processor_records_missing_link_artifact_as_already_text() -> None:
+    candidate = make_candidate_without_artifact(
+        {
+            "downloads_dir": "/tmp/downloads",
+            "expected_artifact_prefix": "imsgx-r0574-x3-link-",
+            "downloads_row": 1107,
+            "column": "X3",
+            "type": "Link",
+            "object": "https://www.skool.com/ai-profit-lab-7462/about",
+        },
+        source="https://www.skool.com/ai-profit-lab-7462/about",
+    )
+    service = FakeTextifyService(make_textify_response(TextifyStatus.CONVERTED))
+    store = InMemoryPipelineStore({PipelineStage.TEXTIFY.value: [candidate]})
+
+    result = run_processor_once(TextifyProcessor(service), store=store, artifacts=InMemoryArtifactStore())
+
+    assert result.record is not None
+    assert result.record.status == TextifyProcessStatus.ALREADY_TEXT.value
+    assert result.record.object_ is None
+    assert result.record.output_source == candidate.source_ref
+    assert result.record.metadata == {
+        "textify_status": TextifyStatus.SKIPPED_TEXT_MEDIA.value,
+        "warnings": ["link has no downloaded artifact for textify; using URL as text"],
+    }
+    assert service.requests == []
+
+
 def test_textify_processor_requires_path() -> None:
     source_ref = ProcessRef(stage="download", tab="downloads", source="x://post/123")
     candidate = ProcessCandidate(

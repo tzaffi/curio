@@ -42,6 +42,7 @@ class ProcessorRunResult:
 
 
 PipelineProgressCallback = Callable[[ProcessorRunResult], None]
+_CandidateIdentity = tuple[str, ProcessRef, ProcessRef]
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,10 +61,22 @@ def run_processor_once(
     store: PipelineStore,
     artifacts: ArtifactStore,
 ) -> ProcessorRunResult:
+    return _run_processor_once(processor, store=store, artifacts=artifacts)
+
+
+def _run_processor_once(
+    processor: Processor,
+    *,
+    store: PipelineStore,
+    artifacts: ArtifactStore,
+    seen_candidate_identities: set[_CandidateIdentity] | None = None,
+) -> ProcessorRunResult:
     _validate_supported_processor(processor)
     candidate = processor.next_candidate(store)
     if candidate is None:
         return ProcessorRunResult(stage=processor.stage, status=ProcessorRunStatus.NO_CANDIDATE)
+    if seen_candidate_identities is not None:
+        _record_unseen_candidate(processor.stage, candidate, seen_candidate_identities)
 
     existing_record = store.existing_record(
         stage=processor.stage,
@@ -141,9 +154,15 @@ def run_stage(
         raise ValueError("limit must be a positive integer")
 
     results: list[ProcessorRunResult] = []
+    seen_candidate_identities: set[_CandidateIdentity] = set()
     try:
         for _ in range(limit):
-            result = run_processor_once(processor, store=store, artifacts=artifacts)
+            result = _run_processor_once(
+                processor,
+                store=store,
+                artifacts=artifacts,
+                seen_candidate_identities=seen_candidate_identities,
+            )
             results.append(result)
             _notify_progress(progress_callback, result)
             if result.status not in PROGRESSING_PROCESSOR_RUN_STATUSES:
@@ -174,12 +193,18 @@ def run_artifact_through(
         _validate_supported_processor(processor)
 
     results: list[ProcessorRunResult] = []
+    seen_candidate_identities: set[_CandidateIdentity] = set()
     iterations = 0
     try:
         for _ in range(limit):
             iteration_results: list[ProcessorRunResult] = []
             for processor in processors:
-                result = run_processor_once(processor, store=store, artifacts=artifacts)
+                result = _run_processor_once(
+                    processor,
+                    store=store,
+                    artifacts=artifacts,
+                    seen_candidate_identities=seen_candidate_identities,
+                )
                 results.append(result)
                 iteration_results.append(result)
                 _notify_progress(progress_callback, result)
@@ -200,6 +225,22 @@ def _notify_progress(
 ) -> None:
     if progress_callback is not None:
         progress_callback(result)
+
+
+def _record_unseen_candidate(
+    stage: str,
+    candidate: ProcessCandidate,
+    seen_candidate_identities: set[_CandidateIdentity],
+) -> None:
+    identity = (stage, candidate.source_ref, candidate.imsgx)
+    if identity in seen_candidate_identities:
+        downloads_row = candidate.source_ref.row_number
+        row_detail = "-" if downloads_row is None else str(downloads_row)
+        raise RuntimeError(
+            "pipeline selected the same candidate twice in one run: "
+            f"stage={stage} downloads_row={row_detail} source={candidate.source}"
+        )
+    seen_candidate_identities.add(identity)
 
 
 def _discard_current_run(
