@@ -745,7 +745,7 @@ Current implementation state:
   header-order-insensitive Sheets parsing without touching live Google Drive.
 - [test] Gate: `make check`, 100% coverage passed.
 
-[lock] [ ] **Checkpoint 6E: Executable full `run`**
+~~[lock] [ ] **Checkpoint 6E: Executable full `run`**~~ DESCOPED BECAUSE WE NEED TO BATCH GOOGLE API CALLS AND SO CAN'T GO 1 ROW AT A TIME!!!
 
 - Implement `curio pipeline run --persist` as the full current-scope pipeline.
 - `run` means artifact-through execution for all in-scope processors:
@@ -784,7 +784,7 @@ Current implementation state:
 
 - Add CLI-level tests for the executable pipeline commands.
 - Invoke `curio pipeline run-stage textify` and `curio pipeline run-stage
-  translate` through the CLI runner.
+translate` through the CLI runner.
 - Invoke `curio pipeline run` through the CLI runner once full current-scope
   execution exists.
 - Non-integration tests must not touch live Google Sheets, Google Drive, or live
